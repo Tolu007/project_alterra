@@ -8,6 +8,7 @@ import { TEMPLATES, weeklyGovernment } from './government';
 import { emptyPnL, isMobile, needsFarmland, openBusiness, openCost } from './business';
 import { hood } from './map';
 import { seedTown } from './npc';
+import { bind } from './seats';
 import { scheduleCulture } from './culture';
 import { makePerson } from './people';
 import { between, pick, rand, weightedPick } from './rng';
@@ -24,6 +25,43 @@ function startPlot(lga: string, type: BizTypeId, taken: number[] = []): number {
 
 /** Saves from before businesses had plots: give each one the nearest free plot. */
 export function upgradeSave(g: Game): Game {
+  // Saves from before seats: the one player becomes the world's only seat.
+  if (!g.seats) {
+    const top = g as unknown as Record<string, unknown>;
+    const flags = (top.flags as Record<string, number>) ?? {};
+    const world: Record<string, number> = {};
+    for (const k of Object.keys(flags)) if (k === 'petrolAvg' || k === 'noLaElection' || k.startsWith('strike:') || k.startsWith('rig:')) {
+      world[k] = flags[k];
+      delete flags[k];
+    }
+    g.wflags = world;
+    g.shared = null;
+    g.humans = [PLAYER];
+    g.seats = [
+      {
+        id: PLAYER,
+        account: 'local',
+        player: g.player,
+        place: g.place,
+        lot: g.lot ?? null,
+        talked: g.talked ?? [],
+        phase: g.phase,
+        report: g.report,
+        eventQueue: g.eventQueue,
+        currentEvent: g.currentEvent,
+        outcome: g.outcome,
+        seenEvents: g.seenEvents,
+        showElection: g.showElection,
+        ending: g.ending,
+        flags,
+        busyUntil: 0,
+        asleep: false,
+        seenMs: 0,
+      },
+    ];
+    g.me = -1;
+    bind(g, PLAYER);
+  }
   if (g.lot === undefined) g.lot = null;
   const old = g as Game & { block?: number };
   if (g.minute === undefined) g.minute = [7, 12, 17, 21][old.block ?? 0] * 60;
@@ -103,11 +141,33 @@ export const PARTY_BASE: Record<StateId | 'REST', Record<PartyId, number>> = {
 };
 
 export function newGame(life: NewLife, seed: number): Game {
+  const g = createWorld(seed, null, life);
+  const id = addSeat(g, life, 'local', PLAYER);
+  bind(g, id);
+  finishWorld(g);
+  return g;
+}
+
+/** A shared world with nobody in it yet: people join with addSeat. Its clock runs at `rate` game minutes per real minute. */
+export function newSharedWorld(seed: number, nowMs: number, rate: number): Game {
+  const g = createWorld(seed, { realMs: nowMs, rate });
+  finishWorld(g);
+  return g;
+}
+
+function createWorld(seed: number, shared: Game['shared'], first?: NewLife): Game {
   const g = { rng: seed | 0, people: [] as Person[] } as unknown as Game;
   Object.assign(g, {
     version: 2,
     seed,
     rngs: { npc: { rng: (seed * 2654435761) | 0 }, culture: { rng: (seed * 2246822519 + 7) | 0 } },
+    seats: [],
+    me: -1,
+    humans: [],
+    wflags: {},
+    shared,
+    busyUntil: 0,
+    asleep: false,
     week: 0,
     day: 0,
     minute: DAY_START,
@@ -156,28 +216,7 @@ export function newGame(life: NewLife, seed: number): Game {
   });
   for (const s of STATES) g.prices[s.id] = { petrol: 0, diesel: 0, food: 1, rice: 0, energy: 0, grid: 8, cpi: 1, scarcity: false };
 
-  // The player is person 0.
-  const home = lgaById(life.home);
-  const startTrade: TradeId = life.start.kind === 'job' ? life.start.trade : bizType(life.start.type).ownerTrade;
-  g.people.push({
-    id: PLAYER,
-    name: life.name,
-    gender: life.gender,
-    age: 24,
-    lga: life.home,
-    trade: startTrade,
-    role: 'friend',
-    money: 0,
-    losses: 0,
-    relation: 100,
-    party: null,
-    style: null,
-    ambition: 1,
-    looks: life.looks,
-    bio: '',
-    office: null,
-    employer: null,
-  });
+  if (first) g.people.push(playerPerson(first, PLAYER));
 
   for (const l of LGAS) {
     g.lgaInfra[l.id] = {
@@ -237,12 +276,46 @@ export function newGame(life: NewLife, seed: number): Game {
     }
   }
 
+  return g;
+}
+
+function playerPerson(life: NewLife, id: number): Person {
+  const startTrade: TradeId = life.start.kind === 'job' ? life.start.trade : bizType(life.start.type).ownerTrade;
+  return {
+    id,
+    name: life.name,
+    gender: life.gender,
+    age: 24,
+    lga: life.home,
+    trade: startTrade,
+    role: 'friend',
+    money: 0,
+    losses: 0,
+    relation: 100,
+    party: null,
+    style: null,
+    ambition: 1,
+    looks: life.looks,
+    bio: '',
+    office: null,
+    employer: null,
+  };
+}
+
+/**
+ * Adds a player to a world: their character, family and a friend, and their start (a job or a business).
+ * Returns their person id. In a fresh single-player world the character already exists as person 0.
+ */
+export function addSeat(g: Game, life: NewLife, account: string, id = g.people.length): number {
+  if (!g.people[id]) g.people.push(playerPerson(life, id));
+  const home = lgaById(life.home);
+  const startTrade: TradeId = life.start.kind === 'job' ? life.start.trade : bizType(life.start.type).ownerTrade;
   // Your people.
   const famPool = namePool(home.state, rand(g));
   const surname = life.name.trim().split(/\s+/).slice(-1)[0] || pick(g, famPool.last);
-  makePerson(g, life.home, 'family', 'trader', { name: `Mama ${surname}`, gender: 'f', age: 54, relation: 70 });
-  makePerson(g, life.home, 'family', 'unemployed', { name: `${pick(g, famPool.m)} ${surname}`, gender: 'm', age: 19, relation: 55, bio: 'Your younger brother. Smart, broke, always on his phone.' });
-  makePerson(g, life.home, 'friend', startTrade, { relation: 45 });
+  makePerson(g, life.home, 'family', 'trader', { name: `Mama ${surname}`, gender: 'f', age: 54, relation: 70, kin: id });
+  makePerson(g, life.home, 'family', 'unemployed', { name: `${pick(g, famPool.m)} ${surname}`, gender: 'm', age: 19, relation: 55, bio: 'Your younger brother. Smart, broke, always on his phone.', kin: id });
+  makePerson(g, life.home, 'friend', startTrade, { relation: 45, kin: id });
 
   const player: Player = {
     pension: 0,
@@ -279,15 +352,47 @@ export function newGame(life: NewLife, seed: number): Game {
     goals: [],
     sick: 0,
   };
-  g.player = player;
+  g.seats.push({
+    id,
+    account,
+    player,
+    place: 'home',
+    lot: null,
+    talked: [],
+    phase: 'day',
+    report: null,
+    eventQueue: [],
+    currentEvent: null,
+    outcome: null,
+    seenEvents: {},
+    showElection: null,
+    ending: null,
+    flags: {},
+    busyUntil: 0,
+    asleep: false,
+    seenMs: 0,
+  });
+  g.humans.push(id);
   if (life.start.kind === 'business') {
     const t = bizType(life.start.type);
     const financed = !!t.financed;
-    const plot = isMobile(t.id) ? -1 : startPlot(life.home, t.id);
-    openBusiness(g, t.id, life.home, financed, plot);
-    if (!financed) player.money -= openCost(g, t.id);
+    const taken = g.businesses.filter((b) => b.lga === life.home).map((b) => b.plot);
+    const free = isMobile(t.id) || hood(life.home).lots.some((p) => !taken.includes(p) && (hood(life.home).plots[p].kind === 'farm') === needsFarmland(t.id));
+    if (free) {
+      const plot = isMobile(t.id) ? -1 : startPlot(life.home, t.id, taken);
+      openBusiness(g, t.id, life.home, financed, plot, id);
+      if (!financed) player.money -= openCost(g, t.id);
+    } else {
+      // Every plot in town is taken: start looking for work instead, with your money intact.
+      player.trade = 'unemployed';
+      g.people[id].trade = 'unemployed';
+    }
   }
+  return id;
+}
 
+/** Prices, moods and governments settle, the town opens its shops, and this week's events are planned. */
+function finishWorld(g: Game) {
   updatePrices(g, true);
   updateCohorts(g);
   // Re-base each cohort on its first real figures, so "better or worse than when you started" is fair.
@@ -297,5 +402,5 @@ export function newGame(life: NewLife, seed: number): Game {
   // The rest of the town: neighbours with savings, a few shops already open, and this week's events.
   seedTown(g);
   scheduleCulture(g, 0);
-  return g;
 }
+

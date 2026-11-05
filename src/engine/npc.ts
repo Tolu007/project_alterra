@@ -6,7 +6,8 @@ import { clamp, tradeIncome } from './economy';
 import { hood } from './map';
 import { makePerson } from './people';
 import { between, chance, pick, rand, weightedPick } from './rng';
-import { PLAYER, type Business, type Game, type News, type Person } from './types';
+import { isHuman } from './seats';
+import type { Business, Game, News, Person } from './types';
 
 // The rest of the town has lives too. Neighbours save, open shops on empty plots, hire each other,
 // build up or go bust, and look for work. Their businesses compete with yours for the same customers.
@@ -77,7 +78,7 @@ export function seedTown(g: Game) {
     }
   }
   for (const x of g.people) {
-    if (x.id === PLAYER) continue;
+    if (isHuman(g, x.id)) continue;
     const rich = x.role === 'politician' || x.role === 'godfather';
     x.money = rich ? between(R(g), 50e6, 400e6) : Math.round(between(R(g), 80_000, 700_000) * (0.6 + 2.5 * x.ambition * x.ambition) * (0.6 + lgaById(x.lga).wealth));
   }
@@ -94,13 +95,13 @@ function entrepreneurs(g: Game, lga: string): Person[] {
   // Owners who have done well can open a second, bigger business.
   const big = Math.min(...BIZ.filter((t) => t.kind !== 'starter').map((t) => openCost(g, t.id)));
   return g.people.filter(
-    (x) => x.id !== PLAYER && x.lga === lga && ['neighbour', 'friend', 'market-leader'].includes(x.role) && x.ambition >= 0.5 && x.employer === null && !x.office && (!owners.has(x.id) || (owners.get(x.id)! < 2 && x.money > big * 1.5)),
+    (x) => !isHuman(g, x.id) && x.lga === lga && ['neighbour', 'friend', 'market-leader'].includes(x.role) && x.ambition >= 0.5 && x.employer === null && !x.office && (!owners.has(x.id) || (owners.get(x.id)! < 2 && x.money > big * 1.5)),
   );
 }
 
 /** An entrepreneur in this LGA picks a business they can afford and a free plot, and opens it. */
 function tryOpen(g: Game, lga: string, seeding = false): Business | null {
-  const npcCount = g.businesses.filter((b) => b.lga === lga && b.owner !== PLAYER).length;
+  const npcCount = g.businesses.filter((b) => b.lga === lga && !isHuman(g, b.owner)).length;
   if (npcCount >= MAX_NPC_BIZ) return null;
   const free = freeLots(g, lga);
   const street = free.filter((id) => hood(lga).plots[id].kind === 'street');
@@ -144,7 +145,7 @@ export function npcWeek(g: Game): News[] {
 
   // Savings from work.
   for (const x of g.people) {
-    if (x.id === PLAYER || x.office || x.role === 'politician' || x.role === 'godfather') continue;
+    if (isHuman(g, x.id) || x.office || x.role === 'politician' || x.role === 'godfather') continue;
     const t = tradeById(x.trade);
     if (x.employer !== null) {
       const b = g.businesses.find((y) => y.id === x.employer);
@@ -154,7 +155,7 @@ export function npcWeek(g: Game): News[] {
 
   // Each business run by someone else.
   for (const b of g.businesses.slice()) {
-    if (b.owner === PLAYER) continue;
+    if (isHuman(g, b.owner)) continue;
     const owner = g.people[b.owner];
     // New shops get a few weeks to find their customers.
     owner.losses = b.lastProfit < 0 && g.week - b.opened >= 6 ? owner.losses + 1 : 0;
@@ -190,7 +191,7 @@ export function npcWeek(g: Game): News[] {
 
   // The job market: the jobless look for work; when the economy turns, some lose it.
   for (const x of g.people) {
-    if (x.id === PLAYER || x.role !== 'neighbour' || x.employer !== null) continue;
+    if (isHuman(g, x.id) || x.role !== 'neighbour' || x.employer !== null) continue;
     const c = g.cohorts[x.lga];
     if (x.trade === 'unemployed') {
       const jobs = TRADES.filter((t) => t.kind === 'salary' && (lgaById(x.lga).mix[t.id] ?? 0) > 0);
@@ -217,7 +218,7 @@ export function buyout(g: Game, b: Business, price: number): string {
   owner.money += price;
   owner.trade = 'unemployed';
   owner.relation = clamp(owner.relation + 10, -100, 100);
-  b.owner = PLAYER;
+  b.owner = g.me;
   b.bossDay = -1;
   b.ownerDays = 0;
   return `${owner.name} shook your hand. ${b.name} is yours, staff and all.`;
@@ -225,9 +226,9 @@ export function buyout(g: Game, b: Business, price: number): string {
 
 /** Share of local custom you would win from rivals by opening another of these here. For the open-a-business hint. */
 export function rivalsNote(g: Game, lga: string, type: BizTypeId): string | null {
-  const rivals = g.businesses.filter((b) => b.lga === lga && b.type === type && b.owner !== PLAYER);
+  const rivals = g.businesses.filter((b) => b.lga === lga && b.type === type && b.owner !== g.me);
   if (!rivals.length) return null;
-  const probe = { ...rivals[0], id: -1, owner: PLAYER, level: 1 } as Business;
+  const probe = { ...rivals[0], id: -1, owner: g.me, level: 1 } as Business;
   const keep = competition({ ...g, businesses: [...g.businesses, probe] } as Game, probe);
   return `${rivals.length} already on these streets (${rivals.map((r) => r.name).join(', ')}): you would get about ${Math.round(keep * 100)}% of a lone shop’s custom.`;
 }

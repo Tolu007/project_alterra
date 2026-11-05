@@ -4,6 +4,7 @@ import { LGAS, lgaById, stateById, type StateId, type TradeId } from '../data/wo
 import { clamp, localDemand, okadaBanned, services, startIncome, tradeIncome } from './economy';
 import { hood } from './map';
 import { makePerson } from './people';
+import { humanOf, isHuman } from './seats';
 import type { HasRng } from './rng';
 import { DAYS_PER_WEEK, type Business, type Game, type LedgerLine, type PnLTotals } from './types';
 
@@ -57,9 +58,9 @@ export function openBlocked(g: Game, type: BizTypeId, lga: string, plot: number)
   return null;
 }
 
-export function openBusiness(g: Game, type: BizTypeId, lga: string, financed: boolean, plot: number, owner = 0, name?: string): Business {
+export function openBusiness(g: Game, type: BizTypeId, lga: string, financed: boolean, plot: number, owner = g.me, name?: string): Business {
   const t = bizType(type);
-  const first = g.people[0].name.trim().split(/\s+/)[0] || 'Your';
+  const first = g.people[owner]?.name.trim().split(/\s+/)[0] || 'Your';
   const b: Business = {
     id: (g.businesses.reduce((m, x) => Math.max(m, x.id), -1) ?? -1) + 1,
     type,
@@ -101,15 +102,15 @@ function clientActivity(g: Game, state: StateId, clients: TradeId[]): number {
   return base > 0 ? clamp(now / base, 0.3, 2.5) : 1;
 }
 
-/** Your own businesses in the same state that buy from a supplier of this type. */
-function ownCustomers(g: Game, supplier: BizType, state: StateId): Business[] {
-  return g.businesses.filter((x) => x.owner === 0 && supplier.feeds.includes(x.type) && lgaById(x.lga).state === state);
+/** The same owner's businesses in the state that buy from a supplier of this type. */
+function ownCustomers(g: Game, supplier: BizType, state: StateId, owner: number): Business[] {
+  return g.businesses.filter((x) => x.owner === owner && supplier.feeds.includes(x.type) && lgaById(x.lga).state === state);
 }
 
-/** You own a supplier that feeds this business in the same state. */
+/** The owner also owns a supplier that feeds this business in the same state. */
 function integrated(g: Game, b: Business): boolean {
   const st = lgaById(b.lga).state;
-  return g.businesses.some((x) => x.owner === 0 && x.id !== b.id && bizType(x.type).feeds.includes(b.type) && lgaById(x.lga).state === st);
+  return g.businesses.some((x) => x.owner === b.owner && x.id !== b.id && bizType(x.type).feeds.includes(b.type) && lgaById(x.lga).state === st);
 }
 
 export function demandFor(g: Game, b: Business): number {
@@ -118,7 +119,7 @@ export function demandFor(g: Game, b: Business): number {
   const sv = services(g, b.lga);
   const pr = g.prices[l.state];
   let d: number;
-  if (t.kind === 'supplier') d = clientActivity(g, l.state, t.clients) * (1 + 0.12 * Math.min(4, ownCustomers(g, t, l.state).length));
+  if (t.kind === 'supplier') d = clientActivity(g, l.state, t.clients) * (1 + 0.12 * Math.min(4, ownCustomers(g, t, l.state, b.owner).length));
   else d = localDemand(g, b.lga) * (0.6 + 0.8 * l.wealth);
   switch (b.type) {
     case 'school':
@@ -170,8 +171,9 @@ export function starterShift(g: Game, b: Business): number {
   const t = bizType(b.type);
   if (t.kind !== 'starter' || !t.trade) return 0;
   let weekly = tradeIncome(g, b.lga, t.trade).income * competition(g, b);
+  const owner = humanOf(g, b.owner) ?? g.player;
   if (g.demolition[b.lga] > 0 && (g.flags.relocated ?? 0) > 0 && tradeById(t.trade).markets > 0.2) weekly = (weekly / 0.4) * 0.8;
-  const skill = 0.75 + 0.1 * g.player.skills[tradeById(t.trade).skill];
+  const skill = 0.75 + 0.1 * owner.skills[tradeById(t.trade).skill];
   return (weekly / 5) * skill * (1 + 0.15 * (b.level - 1));
 }
 
@@ -279,18 +281,19 @@ const NPC_PRESENCE = 0.8;
 
 /**
  * One night's trading for every business in the world: a sixth of a week at today's boss presence.
- * Other owners are paid straight into their pockets. Returns what each of yours made today; the caller pays it out.
+ * Computer-run owners are paid straight into their pockets. Returns what each player's businesses made today,
+ * with the owner's person id; the caller pays it out.
  */
-export function settleDay(g: Game): LedgerLine[] {
-  const lines: LedgerLine[] = [];
+export function settleDay(g: Game): (LedgerLine & { owner: number })[] {
+  const lines: (LedgerLine & { owner: number })[] = [];
   const today = g.week * 7 + g.day;
   for (const b of g.businesses) {
-    const mine = b.owner === 0;
-    const day = weeklyPnL(g, b, mine ? (b.bossDay === today ? 1 : 0) : NPC_PRESENCE, dayBoost(g, b));
+    const human = isHuman(g, b.owner);
+    const day = weeklyPnL(g, b, human ? (b.bossDay === today ? 1 : 0) : NPC_PRESENCE, dayBoost(g, b));
     for (const k of Object.keys(day) as (keyof PnL)[]) b.week[k] += day[k] / DAYS_PER_WEEK;
     const profit = day.profit / DAYS_PER_WEEK;
-    if (!mine) g.people[b.owner].money += profit;
-    else if (Math.abs(profit) >= 1) lines.push({ label: b.name, amount: profit });
+    if (!human) g.people[b.owner].money += profit;
+    else if (Math.abs(profit) >= 1) lines.push({ owner: b.owner, label: b.name, amount: profit });
   }
   return lines;
 }
@@ -316,10 +319,11 @@ export function settleBusinesses(g: Game): LedgerLine[] {
     ].filter((x) => Math.abs(x.amount) >= 1);
     if (b.financeWeeks > 0) b.financeWeeks--;
     b.ownerDays = 0;
-    if (b.owner !== 0) continue;
+    const owner = humanOf(g, b.owner);
+    if (!owner) continue;
     if (Math.abs(pnl.profit) >= 1) lines.push({ label: b.name, amount: pnl.profit });
     // Employers are respected: every job is a family that remembers you.
-    g.player.influence[b.lga] = clamp(g.player.influence[b.lga] + Math.min(2, 0.05 * b.staff.length), 0, 100);
+    owner.influence[b.lga] = clamp(owner.influence[b.lga] + Math.min(2, 0.05 * b.staff.length), 0, 100);
   }
   return lines;
 }
@@ -352,7 +356,8 @@ export function fire(g: Game, b: Business): number | null {
   p.employer = null;
   p.trade = 'unemployed';
   p.relation = clamp(p.relation - 30, -100, 100);
-  g.player.influence[b.lga] = clamp(g.player.influence[b.lga] - 1, 0, 100);
+  const owner = humanOf(g, b.owner);
+  if (owner) owner.influence[b.lga] = clamp(owner.influence[b.lga] - 1, 0, 100);
   return id;
 }
 
@@ -366,5 +371,5 @@ export function sellBusiness(g: Game, b: Business): number {
   return value;
 }
 
-export const playerBusinesses = (g: Game) => g.businesses.filter((b) => b.owner === 0);
+export const playerBusinesses = (g: Game) => g.businesses.filter((b) => b.owner === g.me);
 export const bizTypesAt = (place: string) => BIZ.filter((t) => t.place === place);

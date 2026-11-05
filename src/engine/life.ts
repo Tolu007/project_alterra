@@ -6,12 +6,13 @@ import { clamp, localDemand, okadaBanned, tradeIncome } from './economy';
 import { FORM_PRICE, formBlocked, jurisdictionLgas, officeFor } from './elections';
 import { govById, levelOf } from './government';
 import { BIZ, WAGES, bizType, type BizType, type BizTypeId } from '../data/businesses';
-import { businessOn, businessValue, fire, growCost, hire, isMobile, needsFarmland, openBlocked, openBusiness, openCost, playerBusinesses, sellBusiness, settleBusinesses, settleDay, stageName, staffCap, starterShift, wageWeekly, weeklyPnL } from './business';
+import { businessOn, businessValue, fire, growCost, hire, isMobile, needsFarmland, openBlocked, openBusiness, openCost, playerBusinesses, sellBusiness, settleDay, stageName, staffCap, starterShift, wageWeekly, weeklyPnL } from './business';
 import { hood } from './map';
+import { absNow, humanOf, isHuman } from './seats';
 import { attend, eventsHere, isOn } from './culture';
 import { buyout, buyoutPrice, rivalsNote } from './npc';
 import { between, chance, pick } from './rng';
-import { PLAYER, WEEKS_PER_YEAR, type Business, type Game, type Housing } from './types';
+import { WEEKS_PER_YEAR, type Business, type Game, type Housing, type Player } from './types';
 
 export const HOUSING: Record<Housing, { name: string; rent: number; energy: number }> = {
   family: { name: 'Family house', rent: 0, energy: 0.4 },
@@ -109,9 +110,14 @@ export const perksOf = (trade: TradeId): PerkId[] => tradeById(trade).perks ?? [
  * Hunger and loneliness cost health and energy once they get bad.
  */
 export function passTime(g: Game, minutes: number, activity: 'idle' | 'work' | 'rest' = 'idle', crowd = false) {
+  g.minute += minutes;
+  drift(g, minutes, activity, crowd);
+}
+
+/** What the hours do to the bound player's body and mood, without moving the clock. */
+export function drift(g: Game, minutes: number, activity: 'idle' | 'work' | 'rest' = 'idle', crowd = false) {
   const p = g.player;
   const h = minutes / 60;
-  g.minute += minutes;
   p.hunger = clamp(p.hunger - h * (activity === 'work' ? 2.8 : 2.1), 0, 100);
   p.social = clamp(p.social - h + (crowd ? h * 0.8 : 0), 0, 100);
   if (activity !== 'rest') p.energy = clamp(p.energy - h * 1.2, 0, 100);
@@ -137,12 +143,15 @@ const naira = (n: number) =>
           : `₦${Math.round(n)}`;
 export { naira };
 
-function ledger(g: Game, label: string, amount: number) {
-  const line = g.player.week.find((l) => l.label === label);
+/** Books money in or out for a player, merged into this week's line of the same name. */
+export function ledgerFor(p: Player, label: string, amount: number) {
+  const line = p.week.find((l) => l.label === label);
   if (line) line.amount += amount;
-  else g.player.week.push({ label, amount });
-  g.player.money += amount;
+  else p.week.push({ label, amount });
+  p.money += amount;
 }
+
+const ledger = (g: Game, label: string, amount: number) => ledgerFor(g.player, label, amount);
 
 /** Where the player's day job is, or their first business at home. */
 export function mainWork(g: Game): { place: PlaceId; id: string; lot?: number } | null {
@@ -322,6 +331,8 @@ export function actionsAt(g: Game, place: PlaceId): DayAction[] {
   }
   const open = isOpen(g, place);
   const closesIn = HOURS[place][1] * 60 - g.minute;
+  // In a shared world you cannot start something new while you are still busy or asleep.
+  const occupied = g.shared && g.busyUntil > absNow(g) ? `${g.asleep ? 'Asleep' : 'Busy'} until ${clockLabel(g.busyUntil)}.` : null;
   return out.map((a) => {
     let minutes = a.minutes ?? durationOf(a.id);
     // Shifts end when the place closes.
@@ -331,6 +342,7 @@ export function actionsAt(g: Game, place: PlaceId): DayAction[] {
       ...a,
       minutes,
       blocked:
+        occupied ??
         a.blocked ??
         (!open ? closedNote(place) : null) ??
         short ??
@@ -349,7 +361,7 @@ function lotActions(g: Game, tired: string | null): Draft[] {
   const p = g.player;
   if (g.lot === null) return [];
   const b = businessOn(g, p.at, g.lot);
-  if (b && b.owner === 0) return ownedActions(g, b, tired);
+  if (b && b.owner === g.me) return ownedActions(g, b, tired);
   if (b) return npcLotActions(g, b);
   const plot = hood(p.at).plots[g.lot];
   return BIZ.filter((t) => !isMobile(t.id) && needsFarmland(t.id) === (plot.kind === 'farm')).flatMap((t) => openOffer(g, t, g.lot!));
@@ -438,12 +450,14 @@ export function workerGain(g: Game, b: Business): number {
   return weeklyPnL(g, extra, 0).profit - before;
 }
 
-/** Book tonight's business takings. */
+/** Book tonight's business takings to their owners. Returns what the bound player's businesses made. */
 export function bookBusinessDay(g: Game): number {
   let total = 0;
   for (const line of settleDay(g)) {
-    ledger(g, line.label, line.amount);
-    total += line.amount;
+    const owner = humanOf(g, line.owner);
+    if (!owner) continue;
+    ledgerFor(owner, line.label, line.amount);
+    if (line.owner === g.me) total += line.amount;
   }
   return total;
 }
@@ -609,7 +623,12 @@ export function act(g: Game, id: string): string {
   const working = isShift(id);
   const crowd = working && (g.place === 'market' || g.place === 'park' || g.place === 'lot');
   const startedAt = g.minute;
-  passTime(g, minutes, working ? 'work' : id === 'nap' || id === 'family' ? 'rest' : 'idle', crowd || id === 'network' || id.startsWith('attend:'));
+  const activity = working ? 'work' : id === 'nap' || id === 'family' ? 'rest' : 'idle';
+  if (g.shared) {
+    // In a shared world the clock belongs to everyone: you are busy until it is done.
+    drift(g, minutes, activity, crowd || id === 'network' || id.startsWith('attend:'));
+    g.busyUntil = absNow(g) + minutes;
+  } else passTime(g, minutes, activity, crowd || id === 'network' || id.startsWith('attend:'));
 
   if (id === 'work') {
     // Salaried job: pay comes at month end; this records attendance.
@@ -619,7 +638,7 @@ export function act(g: Game, id: string): string {
     const late = startedAt > 9.5 * 60 && isWorkday(g.day);
     if (late) p.queries = Math.min(3, p.queries + 0.25);
     if (minutes < 300) return `You came in at ${clockLabel(startedAt)} and did ${Math.round(minutes / 60)} hours. Your supervisor looked at the clock.`;
-    return isWorkday(g.day) ? `A full day at work, ${clockLabel(startedAt)} to ${clockLabel(g.minute)}.${late ? ' You were late; it was noted.' : ''} The month-end alert is what keeps you going.` : 'Saturday overtime. Your supervisor saw you.';
+    return isWorkday(g.day) ? `A full day at work, ${clockLabel(startedAt)} to ${clockLabel(startedAt + minutes)}.${late ? ' You were late; it was noted.' : ''} The month-end alert is what keeps you going.` : 'Saturday overtime. Your supervisor saw you.';
   }
   if (id === 'sleep') return pick(g, ['Lights out. The generator next door keeps singing.', 'You slept like a baby.', 'Mosquitoes held a rally in your room, but you slept.']);
   if (id === 'nap') {
@@ -659,7 +678,7 @@ export function act(g: Game, id: string): string {
       ledger(g, 'Work', earned);
       const skill = tradeById(type.trade!).skill;
       p.skills[skill] = Math.min(5, p.skills[skill] + 0.01);
-      return minutes < 200 ? `A short shift till closing: ${naira(earned)}.` : `You worked ${clockLabel(startedAt)} to ${clockLabel(g.minute)} and made ${naira(earned)}.`;
+      return minutes < 200 ? `A short shift till closing: ${naira(earned)}.` : `You worked ${clockLabel(startedAt)} to ${clockLabel(startedAt + minutes)} and made ${naira(earned)}.`;
     }
     p.skills.biz = Math.min(5, p.skills.biz + 0.015);
     return pick(g, ['You checked the books, chased two debtors and calmed a supplier.', 'Inventory counted, staff briefed, one customer complaint handled.', 'A long day of meetings, calls and “oga, we need small money for…”.']);
@@ -759,7 +778,7 @@ export function act(g: Game, id: string): string {
     p.social = clamp(p.social + 16, 0, 100);
     p.influence[here] = clamp(p.influence[here] + 3 * (1 + p.skills.people / 5), 0, 100);
     p.skills.people = Math.min(5, p.skills.people + 0.03);
-    const local = g.people.filter((x) => x.lga === here && x.id !== PLAYER);
+    const local = g.people.filter((x) => x.lga === here && !isHuman(g, x.id));
     if (local.length) {
       const friend = pick(g, local);
       friend.relation = clamp(friend.relation + 8, -100, 100);
@@ -823,7 +842,7 @@ export function act(g: Game, id: string): string {
       return 'Rallies in Ibadan, Enugu, Kaduna and Abuja. You are exhausted but known.';
     }
     if (kind === 'rig') {
-      g.flags[`rig:${c.office}`] = 1;
+      g.wflags[`rig:${c.office}`] = 1;
       p.scandal = clamp(p.scandal + 20, 0, 100);
       return 'Ward agents, “materials” and a friendly electoral officer. Nobody wrote anything down. Hopefully.';
     }
@@ -914,7 +933,7 @@ export function act(g: Game, id: string): string {
   if (id === 'protest') {
     p.influence[here] = clamp(p.influence[here] + 4, 0, 100);
     const st = g.states[lgaById(here).state];
-    if (st.style === 'tyrant' && st.leader !== PLAYER && chance(g, 0.3)) {
+    if (st.style === 'tyrant' && !isHuman(g, st.leader) && chance(g, 0.3)) {
       ledger(g, 'Bail', -Math.round(50_000 * P(g)));
       p.health = clamp(p.health - 10, 0, 100);
       return 'Police teargassed the crowd. You spent the night in a cell and paid “bail”.';
@@ -973,8 +992,6 @@ export function weeklyLife(g: Game): string[] {
       }
     }
   }
-  // Business takings were paid out night by night; this only closes the books.
-  settleBusinesses(g);
   p.worked = 0;
 
   // Assets.

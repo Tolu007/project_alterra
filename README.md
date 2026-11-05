@@ -9,14 +9,27 @@ A running economy ties it all together. Every leader's choices, yours included o
 office, move the naira, fuel, food, fares, rent and light. Those prices decide what every
 trade, and every business, takes home.
 
+There are two ways to play:
+- **Online:** one shared world. Sign up with your name, email and password, and play
+  alongside everyone else, with the same economy, the same elections and other players on
+  the same streets.
+- **Offline:** a world of your own, saved in your browser, which you can pause and speed up.
+
 ## Run it
 
 ```sh
 npm install
-npm run dev      # http://localhost:5174
-npm test         # engine, business, policy → outcome checks, and a 3-year soak
-npm run build    # static site in dist/ (the 3D world is a separate, lazily loaded chunk)
+npm run dev      # http://localhost:5174, with the online API; data goes to .data/ (no database needed)
+npm test         # engine, business, multiplayer, server API, policy → outcome checks, and a 3-year soak
+npm run build    # type-checks, builds dist/, and packs .vercel/output (site + API function) for Vercel
 ```
+
+To use Postgres locally instead of `.data/`, or to make yourself an admin, put the settings in
+`.env.local` (it is not committed), for example `ADMIN_EMAILS=you@example.com` and
+`DATABASE_URL=postgres://user:pass@localhost:5432/naija_hustle`.
+`node scripts/serve-vercel.mjs` runs the built Vercel bundle on port 5199, routed the way Vercel
+routes it. `node scripts/api-smoke.mjs <url>` and `node scripts/online-walk.mjs <url> <dir>` check
+the API and a two-player session against any running copy.
 
 Dev-only console helpers: `__nh.skip(weeks)` plays forward on routine; `__nh.office('LA')`
 makes you governor so you can try the budget session.
@@ -24,6 +37,53 @@ makes you governor so you can try the budget session.
 Screenshots with the dev server running (uses the installed Edge): `node scripts/walk3d.mjs <url> <dir> desktop|mobile <state> <LGA nick>`
 plays the opening; `node scripts/stages.mjs <url> <dir> <LGA id>` fills every plot with a business at
 a different stage.
+
+## Online play
+
+- **Accounts:** you sign up with a name, an email and a password. Your name is your
+  character's name.
+  - Passwords are hashed with scrypt.
+  - Sessions are HttpOnly cookies, and the server stores only a hash of each one.
+  - Ten wrong logins in ten minutes locks that email or address out for a while.
+- **One world, one clock:** the server owns the world. Its clock runs in real time at
+  `WORLD_RATE` game minutes per real minute: 12 by default, which makes a game hour five real
+  minutes, a game day two hours and a game year about a month. Nobody can pause or speed it up.
+- **Actions take real time:** a four-hour shift keeps your character busy for 20 real minutes.
+  You can look around and use your phone meanwhile, and the screen counts down. Going to bed
+  puts you to sleep until 6am world time.
+- **When you are away:** your character goes on without you. It reads the paper, answers
+  events with the first sensible choice, eats, goes to work or to its business, and sleeps.
+  Last week's paper waits for you when you come back.
+- **Other players:** they appear on the streets of the LGA they are in, labelled "Player". Their
+  families keep to their own houses. You never receive anyone else's private details (money,
+  inbox, needs).
+  - Their businesses compete with yours, and you can be a customer at them.
+  - Two players can run for the same office. If two players win the same party's primary, the
+    one with more standing gets the ticket.
+- **Staying in sync:** the screen asks for news every 4 seconds (every 20 when the tab is
+  hidden). An unchanged world costs one tiny response.
+- **Analytics:** every page load is counted as a visit, and every browser as a visitor (by a
+  random id kept in that browser; no IP addresses are stored). Players count as online if
+  they were active in the last 90 seconds; the game shows the count to everyone. Accounts
+  listed in `ADMIN_EMAILS` get a "Players and visits" page at `/#stats` with:
+  - who is online now;
+  - accounts and characters;
+  - visits and visitors per day for the last 14 days, with sign-ups.
+
+## Deploying on Vercel
+
+1. Import the GitHub repo in Vercel. Leave the build command as `npm run build`. It writes
+   `.vercel/output` (Vercel's Build Output format), which Vercel deploys as is: the game as
+   static files and `/api` as one Node function. The "Output Directory" setting is not used.
+2. Add a database: **Storage → Create Database → Neon (Postgres)**, and connect it to the
+   project. This sets `DATABASE_URL` for you. The tables (`nh_accounts`, `nh_sessions`,
+   `nh_worlds`, `nh_visits`) are created on the first request.
+3. Under **Settings → Environment Variables**, add `ADMIN_EMAILS` with your email (separate
+   several with commas). Optionally, add `WORLD_RATE`.
+4. Redeploy. Sign up on the live site with the admin email and open `/#stats`.
+
+Without `DATABASE_URL` the server writes to `.data/`. That works locally but not on Vercel,
+where function storage is temporary.
 
 ## Playing
 
@@ -109,6 +169,9 @@ a different stage.
   - `business.ts`: business demand, P&L, staff, supply-chain links and valuation.
   - `life.ts`, `sim.ts`: actions by place and block, needs, nights, Sunday settlement.
   - `elections.ts`, `events.ts`, `talk.ts`.
+  - `seats.ts`: a world holds many players; each player's private state is a seat, bound into
+    the game while the engine works for them. `world.ts`: the shared world's real-time clock,
+    nightly and weekly turnovers for everyone at once, and autopilot for players who are away.
   - `npc.ts`: everyone else's businesses and jobs. `culture.ts`: premieres, shows, matches and
     festivals. Both have their own random streams, so they do not change the dice for the rest of
     the world.
@@ -120,6 +183,14 @@ a different stage.
   businesses at each stage. There are also regional building styles, people with walk cycles,
   traffic on every road, a danfo that stops at the bus stop, day/night light, rain and
   NEPA-dependent lamps. There are no external 3D assets: everything is built in code.
+- `server/`: the online API.
+  - `api.ts`: routes.
+  - `auth.ts`: accounts and sessions.
+  - `game.ts`: loads the world, brings it up to now, applies actions under a lock, and sends
+    each player their view.
+  - `store.ts`: Postgres, or a JSON file for development.
+
+  It runs inside Vite's dev server and as a Vercel function. `src/net/` is the browser's side.
 - `src/ui3d/`: HUD, action menu, chat card, phone. `src/ui/` has the shared panels and the
   modals (weekly report, events, budget session, election night).
 
@@ -153,8 +224,15 @@ a different stage.
   else is in the economy's statistics.
 - **Billboards are invented:** the governor's board carries a slogan for their leadership
   style, and the ads are for made-up brands.
-- **Single-player for now.** Every business has an `owner` person id, so other players can be
-  owners and employees later.
+- **Basic multiplayer:**
+  - One shared world, with updates every few seconds rather than instantly.
+  - No chat, and no trading or hiring between players. You cannot buy another player's
+    business.
+  - No password reset, and email addresses are not verified.
+  - A world nobody visits for more than a game week skips ahead instead of replaying every day.
+  - At most about three dozen named people live in each LGA, so in a busy LGA new players
+    share the same faces.
+- **Offline is still single-player:** your own world, with the same rules, saved in your browser.
 
 ## Credits
 

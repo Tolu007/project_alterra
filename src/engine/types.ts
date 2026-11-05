@@ -12,6 +12,7 @@ export const WEEKS_PER_MONTH = 4;
 export const MONTHS_PER_YEAR = 12;
 export const WEEKS_PER_YEAR = WEEKS_PER_MONTH * MONTHS_PER_YEAR;
 export const START_YEAR = 2027;
+/** Person id of the player in single-player saves made before seats existed. Use `g.me` for "the current player". */
 export const PLAYER = 0;
 
 export interface Macro {
@@ -149,6 +150,8 @@ export interface Person {
   employer: number | null;
   /** Cash in hand, ₦: what an entrepreneur can open or grow a business with. */
   money: number;
+  /** The player character this person is family or a friend of. */
+  kin?: number;
   /** Weeks in a row their business has lost money. */
   losses: number;
 }
@@ -263,6 +266,9 @@ export interface Player {
   sick: number;
   /** Retirement savings from salaried jobs (RSA), ₦. */
   pension: number;
+  /** The latest weekly paper, kept after it is filed, and the week you last read. */
+  paper?: WeekReport | null;
+  paperSeen?: number;
 }
 
 export type NewsKind = 'politics' | 'economy' | 'business' | 'culture' | 'sports' | 'life';
@@ -332,7 +338,10 @@ export interface ElectionRecord {
   turnout: number;
   /** "Rest of Nigeria" votes for presidential elections. */
   rest?: number[];
+  /** A player was on the ballot. */
   playerRan: boolean;
+  /** Which players were on the ballot. */
+  humans?: number[];
 }
 
 export type Phase = 'day' | 'week' | 'event' | 'govern' | 'election' | 'over';
@@ -350,10 +359,63 @@ export interface WeekReport {
   headlines: News[];
 }
 
+/**
+ * One person's private slice of the world: their character's life, where they are, their inbox.
+ * The engine works on whichever seat is bound into the top-level fields of the game (see seats.ts).
+ */
+export interface Seat {
+  /** Person id of their character. */
+  id: number;
+  /** Who plays it: an account id online, 'local' offline. */
+  account: string;
+  player: Player;
+  place: PlaceId;
+  lot: number | null;
+  talked: number[];
+  phase: Phase;
+  report: WeekReport | null;
+  eventQueue: EventInstance[];
+  currentEvent: EventInstance | null;
+  outcome: string | null;
+  seenEvents: Record<string, number>;
+  showElection: number | null;
+  ending: Ending | null;
+  flags: Record<string, number>;
+  busyUntil: number;
+  asleep: boolean;
+  /** Real time (ms) this player was last seen; anyone away for a while is on autopilot. */
+  seenMs: number;
+}
+
+/** Another player as everyone else sees them. */
+export interface PublicSeat {
+  id: number;
+  place: PlaceId;
+  lot: number | null;
+  at: string;
+  busyUntil: number;
+  asleep: boolean;
+  online: boolean;
+}
+
 export interface Game {
   version: 2;
   seed: number;
   rng: number;
+  /** Everyone with a character in this world, and the one whose life is bound below. -1 when none is. */
+  seats: Seat[];
+  me: number;
+  /** Person ids of characters played by people. */
+  humans: number[];
+  /** Other players, for drawing them in the world (only in what the server sends you). */
+  others?: PublicSeat[];
+  /** Flags about the world rather than any one player. */
+  wflags: Record<string, number>;
+  /** Shared worlds run on a real-time clock: this many game minutes per real minute, from this real moment. */
+  shared: { realMs: number; rate: number } | null;
+  /** Bound: minute (absolute, see absNow) the bound character is busy until, and whether they are asleep. */
+  busyUntil: number;
+  asleep: boolean;
   /** Separate random streams, so the town's own life does not change the dice for everything else. */
   rngs: { npc: { rng: number }; culture: { rng: number } };
   week: number;

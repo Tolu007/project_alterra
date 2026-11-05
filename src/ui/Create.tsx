@@ -7,8 +7,9 @@ import { START, startOptions, type NewLife, type StartPath } from '../engine/set
 import type { Looks } from '../engine/types';
 import { ACCENT, HAIR_NAMES, OUTFIT, Portrait, SKIN } from './Portrait';
 
-export function Create({ onStart, onBack }: { onStart: (life: NewLife) => void; onBack: () => void }) {
-  const [name, setName] = useState('');
+/** Make your character. Online, your account name is your character's name and the world is shared. */
+export function Create({ onStart, onBack, fixedName, error, online }: { onStart: (life: NewLife) => void; onBack: () => void; fixedName?: string; error?: string | null; online?: boolean }) {
+  const [name, setName] = useState(fixedName ?? '');
   const [gender, setGender] = useState<'m' | 'f'>('f');
   const [looks, setLooks] = useState<Looks>({ skin: 2, hair: 0, outfit: 3, accent: 0, glasses: false });
   const [state, setState] = useState<StateId>('LA');
@@ -43,7 +44,8 @@ export function Create({ onStart, onBack }: { onStart: (life: NewLife) => void; 
         <section>
           <div className="step">
             <div className="step-label">Name</div>
-            <input className="text-input" value={name} maxLength={32} placeholder="e.g. Bisola Adeyemi" onChange={(e) => setName(e.target.value)} aria-label="Your name" />
+            <input className="text-input" value={name} maxLength={40} placeholder="e.g. Bisola Adeyemi" onChange={(e) => setName(e.target.value)} aria-label="Your name" disabled={!!fixedName} />
+            {fixedName && <small className="muted">From your account.</small>}
           </div>
           <div className="step">
             <div className="step-label">Look</div>
@@ -165,8 +167,13 @@ export function Create({ onStart, onBack }: { onStart: (life: NewLife) => void; 
         <div className="wrap">
           <span className="muted">{ready ? 'Ready.' : 'Give yourself a name.'}</span>
           <button className="btn btn-danfo" disabled={!ready} onClick={() => onStart({ name: name.trim(), gender, looks, home, start: chosen })}>
-            Begin life →
-          </button>
+              {online ? 'Move into the shared world' : 'Begin life →'}
+            </button>
+            {error && (
+              <p className="auth-error" role="alert">
+                {error}
+              </p>
+            )}
         </div>
       </div>
     </main>

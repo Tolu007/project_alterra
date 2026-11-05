@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --port 5174",
-    "build": "tsc -p tsconfig.json && vite build",
+    "build": "tsc -p tsconfig.json && tsc -p tsconfig.server.json && vite build && node scripts/build-vercel.mjs",
     "preview": "vite preview",
     "test": "vitest run",
     "geo": "node scripts/build-geo.mjs",
@@ -14,12 +14,14 @@
   "dependencies": {
     "@react-three/drei": "^10.7.9",
     "@react-three/fiber": "^9.8.2",
+    "postgres": "^3.4.9",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "three": "^0.187.0"
   },
   "devDependencies": {
     "@types/d3-geo": "^3.1.1",
+    "@types/node": "^24.19.2",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@types/three": "^0.187.0",

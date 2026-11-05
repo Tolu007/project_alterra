@@ -75,8 +75,8 @@ export function updateMacro(g: Game) {
 
   // General price level: base drift, money printing, exchange-rate and fuel pass-through, interest rates.
   const petrolAvg = STATE_IDS.reduce((a, s) => a + g.prices[s].petrol, 0) / STATE_IDS.length;
-  const petrolBefore = g.flags.petrolAvg ?? petrolAvg;
-  g.flags.petrolAvg = petrolAvg;
+  const petrolBefore = g.wflags.petrolAvg ?? petrolAvg;
+  g.wflags.petrolAvg = petrolAvg;
   const growth =
     0.0022 +
     0.000006 * fp.print +
@@ -298,7 +298,7 @@ export function tradeIncome(g: Game, lga: string, trade: TradeId): { income: num
   if ((trade === 'keke' || trade === 'danfo') && okadaBanned(g, lga)) gross *= 1.06;
   if (t.markets > 0.2 && g.demolition[lga] > 0) gross *= 0.4;
   if (trade === 'farmer' && g.fed.policy.riceBan && l.farm === 'Rice farming') gross *= 1.25;
-  if (g.flags[`strike:${l.state}`] && transport) gross *= 0.7;
+  if (g.wflags[`strike:${l.state}`] && transport) gross *= 0.7;
 
   const costs =
     t.fuel * (pr.petrol / g.ref.petrol[l.state] - 1) +

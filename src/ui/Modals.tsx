@@ -7,7 +7,7 @@ import { eventById } from '../engine/events';
 import { govById, levelOf } from '../engine/government';
 import { GOALS, naira, netWorth } from '../engine/life';
 import { chooseEvent, continueEvent, eventChoices, type GovernPlan } from '../engine/sim';
-import { PLAYER, type Game, type News } from '../engine/types';
+import type { Game, News } from '../engine/types';
 import { Portrait } from './Portrait';
 
 function useFocus(dep: unknown) {
@@ -142,7 +142,7 @@ function FrontPage({ week, headlines }: { week: number; headlines: News[] }) {
 
 // ───────────── events ─────────────
 
-export function EventModal({ g, setGame }: { g: Game; setGame: (g: Game) => void }) {
+export function EventModal({ g, setGame, onChoose, onDone }: { g: Game; setGame: (g: Game) => void; onChoose?: (i: number) => void; onDone?: () => void }) {
   const e = g.currentEvent!;
   const def = eventById(e.id);
   const ref = useFocus(`${e.id}:${g.outcome !== null}`);
@@ -161,7 +161,7 @@ export function EventModal({ g, setGame }: { g: Game; setGame: (g: Game) => void
           {g.outcome === null ? (
             <div className="choices">
               {choices.map((c, i) => (
-                <button key={i} className="choice" disabled={!!c.blocked} onClick={() => setGame(chooseEvent(g, i))}>
+                <button key={i} className="choice" disabled={!!c.blocked} onClick={() => (onChoose ? onChoose(i) : setGame(chooseEvent(g, i)))}>
                   {c.label}
                   {(c.blocked || c.hint) && <small>{c.blocked ?? c.hint}</small>}
                 </button>
@@ -173,7 +173,7 @@ export function EventModal({ g, setGame }: { g: Game; setGame: (g: Game) => void
                 {g.outcome}
               </div>
               <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                <button className="btn btn-ink" onClick={() => setGame(continueEvent(g))}>
+                <button className="btn btn-ink" onClick={() => (onDone ? onDone() : setGame(continueEvent(g)))}>
                   Continue →
                 </button>
               </div>
@@ -412,8 +412,8 @@ export function ElectionModal({ g, onClose }: { g: Game; onClose: () => void }) 
   const level = levelOf(rec.office);
   const total = rec.candidates.reduce((a, c) => a + c.votes, 0) || 1;
   const ranked = rec.candidates.slice().sort((a, b) => b.votes - a.votes);
-  const winner = rec.winner === PLAYER ? 'You' : g.people[rec.winner].name;
-  const youWon = rec.winner === PLAYER;
+  const winner = rec.winner === g.me ? 'You' : g.people[rec.winner].name;
+  const youWon = rec.winner === g.me;
   const where = level === 'federal' ? 'Nigeria' : level === 'state' ? stateById(rec.office as StateId).name : `${lgaById(rec.office).name} LGA`;
   return (
     <div className="overlay" role="dialog" aria-modal="true" aria-label="Election results">
@@ -431,7 +431,7 @@ export function ElectionModal({ g, onClose }: { g: Game; onClose: () => void }) 
                 <span style={{ display: 'flex', gap: 8, alignItems: 'center', minWidth: 0 }}>
                   <Portrait looks={person.looks} gender={person.gender} size={34} />
                   <span style={{ minWidth: 0 }}>
-                    <b style={{ display: 'block', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: 13 }}>{c.person === PLAYER ? 'You' : person.name}</b>
+                    <b style={{ display: 'block', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: 13 }}>{c.person === g.me ? 'You' : person.name}</b>
                     <span className="kicker">{party.id}</span>
                   </span>
                 </span>
@@ -493,9 +493,9 @@ export function ElectionModal({ g, onClose }: { g: Game; onClose: () => void }) 
 
 export function Ending({ g, onNew }: { g: Game; onNew: () => void }) {
   const e = g.ending!;
-  const me = g.people[PLAYER];
+  const me = g.people[g.me];
   const years = (e.week / 48).toFixed(1);
-  const offices = [...new Set(g.elections.filter((r) => r.winner === PLAYER).map((r) => officeTitle(r.office)))];
+  const offices = [...new Set(g.elections.filter((r) => r.winner === g.me).map((r) => officeTitle(r.office)))];
   return (
     <main className="wrap" style={{ paddingBlock: 30 }}>
       <div className="sheet wide" style={{ margin: '0 auto' }}>

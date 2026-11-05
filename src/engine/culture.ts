@@ -3,7 +3,8 @@ import { LGAS, lgaById } from '../data/world';
 import { weekOfYear } from './calendar';
 import { clamp } from './economy';
 import { between, chance, pick, rand } from './rng';
-import { PLAYER, type CultureEvent, type CultureKind, type Game, type News } from './types';
+import { isHuman } from './seats';
+import type { CultureEvent, CultureKind, Game, News } from './types';
 
 // Things happening in town: Nollywood premieres, concerts, comedy nights, big matches, festivals and
 // owambe parties. They draw crowds (good for the bukas, bars and salons nearby), make headlines, and
@@ -40,7 +41,8 @@ function make(g: Game, e: Omit<CultureEvent, 'id' | 'attended'>): CultureEvent {
 /** Plans next week's events (call at the end of a week, or at the start of a game for week 0). */
 export function scheduleCulture(g: Game, week: number) {
   g.culture = g.culture.filter((e) => e.week >= week - 1);
-  const homeState = lgaById(g.player.home).state;
+  const homes = [...new Set(g.seats.map((s) => (s.id === g.me ? g.player : s.player).home))];
+  const homeState = lgaById(homes[0] ?? 'IKJ').state;
   const pickLga = (weights: [string, number][]) => {
     let r = rand(R(g)) * weights.reduce((s, [, w]) => s + w, 0);
     for (const [id, w] of weights) if ((r -= w) <= 0) return id;
@@ -62,13 +64,14 @@ export function scheduleCulture(g: Game, week: number) {
     const rival = pick(R(g), RIVALS);
     make(g, { kind: 'football', title: `Super Eagles vs ${rival}`, star: rival, lga: '*', place: 'joint', week, day: chance(R(g), 0.5) ? 2 : 5, start: 17 * 60, end: 19 * 60, ticket: Math.round(1_500 * P(g)), hype: between(R(g), 0.5, 1) });
   }
-  // An owambe near you most Saturdays.
-  if (chance(R(g), 0.6)) {
-    const locals = g.people.filter((x) => x.id !== PLAYER && x.lga === g.player.home && x.role !== 'politician');
+  // An owambe near the players most Saturdays.
+  for (const home of homes.slice(0, 6)) {
+    if (!chance(R(g), 0.6)) continue;
+    const locals = g.people.filter((x) => !isHuman(g, x.id) && x.lga === home && x.role !== 'politician');
     const host = locals.length ? pick(R(g), locals) : null;
     if (host) {
       const why = pick(R(g), ['60th birthday', 'wedding', 'house warming', 'chieftaincy title', 'child dedication', 'burial and thanksgiving']);
-      make(g, { kind: 'owambe', title: `${host.name.split(' ')[0]}’s ${why}`, star: host.name, lga: g.player.home, place: 'venue', week, day: 5, start: 13 * 60, end: 19 * 60, ticket: Math.round(5_000 * P(g)), hype: between(R(g), 0.3, 0.7) });
+      make(g, { kind: 'owambe', title: `${host.name.split(' ')[0]}’s ${why}`, star: host.name, lga: home, place: 'venue', week, day: 5, start: 13 * 60, end: 19 * 60, ticket: Math.round(5_000 * P(g)), hype: between(R(g), 0.3, 0.7) });
     }
   }
   for (const f of FESTIVALS) {

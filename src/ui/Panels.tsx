@@ -8,7 +8,7 @@ import { dateLabel, ELECTION_WEEK, weeksUntilElection } from '../engine/calendar
 import { okadaBanned, services, tradeIncome } from '../engine/economy';
 import { officeTitle } from '../engine/elections';
 import { GOALS, HOUSING, naira, netWorth } from '../engine/life';
-import { PLAYER, type Game, type Gov } from '../engine/types';
+import type { Game, Gov } from '../engine/types';
 import { LineChart, StatTile, type Point } from './charts';
 import { Portrait } from './Portrait';
 
@@ -31,7 +31,7 @@ function Meter({ label, value, color }: { label: string; value: number; color: s
 
 export function LifePanel({ g }: { g: Game }) {
   const p = g.player;
-  const me = g.people[PLAYER];
+  const me = g.people[g.me];
   const t = tradeById(p.trade);
   const lines = p.lastWeek.slice().sort((a, b) => b.amount - a.amount);
   const net = lines.reduce((s, l) => s + l.amount, 0);
@@ -264,7 +264,7 @@ function policyChips(level: Level, policy: FedPolicy | StatePolicy | LgaPolicy, 
 }
 
 function LeaderCard({ g, gov, title }: { g: Game; gov: Gov<FedPolicy> | Gov<StatePolicy> | Gov<LgaPolicy>; title: string }) {
-  const you = gov.leader === PLAYER;
+  const you = gov.leader === g.me;
   const person = g.people[gov.leader];
   const party = partyById(gov.party);
   const led = gov.ledger;
@@ -347,7 +347,7 @@ export function PeoplePanel({ g }: { g: Game }) {
   const st = lgaById(g.player.home).state;
   const known = g.people.filter(
     (x) =>
-      x.id !== PLAYER &&
+      x.id !== g.me &&
       (x.role === 'family' || x.role === 'friend' || (x.role === 'neighbour' && x.lga === g.player.home) || (['godfather', 'journalist', 'union-chairman', 'market-leader', 'area-boss'].includes(x.role) && lgaById(x.lga).state === st) || (x.office && (x.office === g.player.home || x.office === st || x.office === 'FED'))),
   );
   return (
@@ -451,7 +451,7 @@ export function MapPanel({ g }: { g: Game }) {
             <tr>
               <td>Chairman</td>
               <td className="r">
-                {chair.leader === PLAYER ? 'You' : g.people[chair.leader].name} ({chair.party}) · approval {Math.round(chair.approval)}
+                {chair.leader === g.me ? 'You' : g.people[chair.leader].name} ({chair.party}) · approval {Math.round(chair.approval)}
               </td>
             </tr>
             <tr>

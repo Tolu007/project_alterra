@@ -1299,3 +1299,129 @@ button.chip[aria-pressed='true'] {
   color: var(--ink-3);
   font-style: italic;
 }
+
+/* Online play: the title cards, accounts and the admin stats page. */
+.mode-card {
+  border: var(--b);
+  border-radius: 16px;
+  background: var(--paper);
+  box-shadow: var(--shadow);
+  padding: 12px 16px 14px;
+  margin: 12px 0;
+  max-width: 640px;
+}
+
+.mode-card p {
+  margin: 4px 0 10px;
+}
+
+.mode-card.mode-offline {
+  background: var(--cream);
+  box-shadow: none;
+}
+
+.auth-tabs {
+  display: flex;
+  gap: 0;
+  border: var(--b);
+  border-radius: 999px;
+  overflow: hidden;
+  width: fit-content;
+  margin: 10px 0 14px;
+}
+
+.auth-tabs button {
+  border: 0;
+  background: var(--paper);
+  padding: 8px 18px;
+  font-weight: 800;
+  color: var(--ink);
+}
+
+.auth-tabs button.on {
+  background: var(--ink);
+  color: var(--cream);
+}
+
+.auth-card {
+  max-width: 460px;
+}
+
+.auth-fields {
+  display: grid;
+  gap: 12px;
+}
+
+.auth-fields label {
+  display: grid;
+  gap: 4px;
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.auth-error {
+  margin: 0;
+  color: var(--bad);
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.stats-tiles {
+  margin: 12px 0;
+}
+
+.stats-cols {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
+  gap: 14px;
+  margin: 14px 0;
+}
+
+.online-list {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.online-list .dot,
+.live-chip .dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--good);
+  margin-right: 4px;
+}
+
+.stats-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13.5px;
+}
+
+.stats-table th,
+.stats-table td {
+  text-align: left;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--line);
+}
+
+.stats-table .num,
+.stats-table th:not(:first-child) {
+  text-align: right;
+  font-family: var(--mono);
+}
+
+.visits-chart svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.chart-readout {
+  font-size: 13px;
+  color: var(--ink-2);
+  min-height: 1.4em;
+}

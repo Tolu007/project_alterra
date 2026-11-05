@@ -12,7 +12,7 @@ import { DAY_NAMES, clockLabel, isRainySeason } from '../engine/calendar';
 import { okadaBanned } from '../engine/economy';
 import { officeTitle } from '../engine/elections';
 import { COLS, MAIN_HALF, MAIN_Z, ROAD_X, ROAD_Z, ROWS, SIDE_HALF, doorOf, halfWidth, hood, route, walkable, type Plot, type Pt } from '../engine/map';
-import { PLAYER, type Game, type Person } from '../engine/types';
+import type { Game, Person } from '../engine/types';
 import { Brt, Canoe, Car, Danfo, Keke, Mover, Okada, Person3D, Truck, Walker, mat, type Pose } from './Actors';
 import { BizBuilding } from './BizBuildings';
 import { Building, earthen } from './Buildings';
@@ -191,7 +191,7 @@ function Scene({ g, clock, busy, target, selected, floats, onWalk, onArrive, onT
     onWalk({ point: [e.point.x, e.point.z] });
   };
 
-  const me = g.people[PLAYER];
+  const me = g.people[g.me];
   const party = g.player.party ? partyById(g.player.party) : partyById(g.states[lga.state].party);
   const kekeColor = lga.state === 'KN' ? '#d6b21a' : '#1e8f5a';
   const walls = WALLS[style];
@@ -625,11 +625,11 @@ function Billboards({ g, lga, lit }: { g: Game; lga: string; lit: boolean }) {
   const gov = g.people[st.leader];
   const party = partyById(st.party);
   const surname = gov ? gov.name.split(' ').slice(-1)[0].toUpperCase() : '';
-  const best = g.businesses.filter((b) => b.owner === PLAYER && stageOf(b.type, b.level) >= 3).sort((a, b) => b.level - a.level)[0];
+  const best = g.businesses.filter((b) => b.owner === g.me && stageOf(b.type, b.level) >= 3).sort((a, b) => b.level - a.level)[0];
   const ad = best ? { head: best.name.toUpperCase(), sub: `Now in ${lgaById(best.lga).nick}. Come and see us!`, bg: '#1f1d1a', fg: '#f2b705' } : ADS[g.week % ADS.length];
   return (
     <group>
-      <Billboard x={X0 + 10} z={-(MAIN_HALF + 7)} head={st.leader === PLAYER ? 'YOUR GOVERNOR' : `GOV. ${surname}`} sub={`${party.id} · ${SLOGANS[st.style]}`} bg={party.color} fg={party.ink} lit={lit} />
+      <Billboard x={X0 + 10} z={-(MAIN_HALF + 7)} head={st.leader === g.me ? 'YOUR GOVERNOR' : `GOV. ${surname}`} sub={`${party.id} · ${SLOGANS[st.style]}`} bg={party.color} fg={party.ink} lit={lit} />
       <Billboard x={X1 - 10} z={-(MAIN_HALF + 7)} head={ad.head} sub={ad.sub} bg={ad.bg} fg={ad.fg} lit={lit} />
     </group>
   );
@@ -789,9 +789,20 @@ function Townsfolk({ g, lga, playerPos, onTalk }: { g: Game; lga: string; player
     const placed: { person: Person; x: number; z: number; face: number; from: Pt }[] = [];
     const counts: Record<string, number> = {};
     for (const who of g.people) {
-      if (who.id === PLAYER || who.lga !== lga) continue;
-      if (who.role === 'politician' && !who.office) continue;
-      let spot = whereNow(g, who, hour % 24);
+      if (who.id === g.me) continue;
+      let spot: Spot | null;
+      if (g.humans.includes(who.id)) {
+        // Another player: wherever they really are right now, unless they are asleep at home.
+        const o = g.others?.find((x) => x.id === who.id);
+        if (!o || o.at !== lga || o.asleep) continue;
+        spot = { place: o.place, lot: o.lot };
+      } else {
+        if (who.lga !== lga) continue;
+        if (who.role === 'politician' && !who.office) continue;
+        spot = whereNow(g, who, hour % 24);
+        // Another player's family keeps to their own house, not yours.
+        if (spot && who.role === 'family' && who.kin !== undefined && who.kin !== g.me) spot = { place: 'lot', lot: h.fillers[who.kin % h.fillers.length] };
+      }
       if (!spot) continue;
       if (spot.place !== 'lot' && h.place[spot.place] === undefined) spot = { place: 'joint', lot: null };
       const plotId = spot.place === 'lot' ? spot.lot : h.place[spot.place];
@@ -858,10 +869,16 @@ function NamedPerson({ g, lga, who, x, z, from, face, playerPos, onTalk, working
   });
   const job = who.employer !== null ? g.businesses.find((b) => b.id === who.employer) : undefined;
   const own = g.businesses.find((b) => b.owner === who.id);
-  const sub = who.office
+  const other = g.others?.find((x) => x.id === who.id);
+  const kinOf = who.kin !== undefined && who.kin !== g.me ? g.people[who.kin]?.name.split(' ')[0] : null;
+  const sub = other
+    ? `Player · ${other.online ? 'online' : 'away'}`
+    : kinOf && (who.role === 'family' || who.role === 'friend')
+    ? `${kinOf}’s ${who.role === 'family' ? 'family' : 'friend'}`
+    : who.office
     ? officeTitle(who.office)
     : job
-      ? job.owner === PLAYER
+      ? job.owner === g.me
         ? 'Works for you'
         : `Works at ${job.name}`
       : own

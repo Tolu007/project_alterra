@@ -16,8 +16,8 @@ export function mat(color: string, opts: { emissive?: string; rough?: number; me
       flatShading: true,
       roughness: opts.rough ?? 0.85,
       metalness: opts.metal ?? 0,
-      emissive: opts.emissive ? new THREE.Color(opts.emissive) : undefined,
-      emissiveIntensity: opts.emissive ? 1 : 0,
+      // Only glowing materials get an emissive colour; three.js warns about an undefined one.
+      ...(opts.emissive ? { emissive: new THREE.Color(opts.emissive), emissiveIntensity: 1 } : {}),
       transparent: opts.transparent !== undefined,
       opacity: opts.transparent ?? 1,
     });

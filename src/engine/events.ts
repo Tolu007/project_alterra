@@ -422,7 +422,7 @@ export const EVENTS: EventDef[] = [
   {
     id: 'big-order',
     kicker: 'OPPORTUNITY',
-    weight: (g) => (g.businesses.some((b) => b.owner === 0) ? 0.8 : 0),
+    weight: (g) => (g.businesses.some((b) => b.owner === g.me) ? 0.8 : 0),
     cooldown: 6,
     title: () => 'A BIG CUSTOMER WANTS A BULK ORDER',
     body: () => 'An event planner, a contractor, or a big man’s PA. They want a lot, fast, and they will pay at once.',
@@ -430,7 +430,7 @@ export const EVENTS: EventDef[] = [
       {
         label: 'Take it, work through the night',
         apply: () => {
-          const amount = Math.round(Math.max(40_000, trade(g).base) * P(g) * 0.6 * (1 + g.businesses.filter((b) => b.owner === 0).length * 0.5));
+          const amount = Math.round(Math.max(40_000, trade(g).base) * P(g) * 0.6 * (1 + g.businesses.filter((b) => b.owner === g.me).length * 0.5));
           earn(g, 'Bulk order', amount);
           p(g).energy = bump(p(g).energy, -25);
           return `Done by morning. ${naira(amount)} in one alert.`;

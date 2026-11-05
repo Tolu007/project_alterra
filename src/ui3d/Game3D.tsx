@@ -9,7 +9,9 @@ import { officeTitle } from '../engine/elections';
 import { HOURS, actionsAt, naira, placesIn, type DayAction } from '../engine/life';
 import { COLS, MAIN_Z, PAVEMENT, ROAD_X, ROAD_Z, ROWS, SIDE_HALF, halfWidth, hood, type Pt } from '../engine/map';
 import { advanceClock, doAction, goTo, hireTalent, payRide, peek, rideFare, routineWeek, talkTo } from '../engine/sim';
-import { DAYS_PER_WEEK, PLAYER, type Game } from '../engine/types';
+import { DAYS_PER_WEEK, type Game } from '../engine/types';
+import type { Intent } from '../engine/world';
+import { WeekReport } from '../ui/Modals';
 import { Portrait } from '../ui/Portrait';
 import { World, type Float, type Selection, type WalkTarget } from '../world/World';
 import { Phone, type AppId } from './Phone';
@@ -26,13 +28,28 @@ export function duration(minutes: number): string {
   return h ? `${h}h${m ? String(m).padStart(2, '0') : ''}` : `${m}m`;
 }
 
+/** Online play: the server owns the world and its clock; the screen sends requests and shows the answers. */
+export interface Online {
+  send(intent: Intent): Promise<{ ok: boolean; text: string } | null>;
+  /** Real time of the last update, how far the world had run past its last step then, and its speed. */
+  serverNow: number;
+  lag: number;
+  rate: number;
+  count: number;
+}
+
 interface Props {
   g: Game;
   setGame: (g: Game) => void;
   onQuit: () => void;
+  online?: Online;
 }
 
-export function Game3D({ g, setGame, onQuit }: Props) {
+/** The shared world's clock as this screen sees it: minutes after midnight, continuing past the last update. */
+const liveMinute = (g: Game, o: Online) => g.minute + o.lag + ((Date.now() - o.serverNow) / 60_000) * o.rate;
+const liveAbs = (g: Game, o: Online) => (g.week * DAYS_PER_WEEK + g.day) * 1440 + liveMinute(g, o);
+
+export function Game3D({ g, setGame, onQuit, online }: Props) {
   const [target, setTarget] = useState<WalkTarget | null>(null);
   const [menu, setMenu] = useState<Selection | null>(null);
   const [busy, setBusy] = useState(false);
@@ -59,6 +76,17 @@ export function Game3D({ g, setGame, onQuit }: Props) {
   const anim = useRef<{ from: number; to: number; t0: number; ms: number } | null>(null);
   const setGameRef = useRef(setGame);
   setGameRef.current = setGame;
+  const onlineRef = useRef(online);
+  onlineRef.current = online;
+  const [paperOpen, setPaperOpen] = useState(false);
+  // Online, your character may be busy (or asleep) for a while; the screen counts it down.
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!online) return;
+    const t = window.setInterval(() => setTick((x) => x + 1), 1000);
+    return () => window.clearInterval(t);
+  }, [online]);
+  const occupiedUntil = online && g.busyUntil > liveAbs(g, online) ? g.busyUntil : null;
 
   useEffect(() => () => timers.current.forEach((t) => window.clearTimeout(t)), []);
   useEffect(() => {
@@ -73,7 +101,11 @@ export function Game3D({ g, setGame, onQuit }: Props) {
       last = now;
       const a = anim.current;
       const gg = gRef.current;
-      if (a) {
+      const o = onlineRef.current;
+      if (o) {
+        // The server keeps time; between updates the clock runs on at the world's speed.
+        clock.current = liveMinute(gg, o);
+      } else if (a) {
         // Fast-forward while an action plays out.
         const k = Math.min(1, (now - a.t0) / a.ms);
         clock.current = a.from + (a.to - a.from) * k;
@@ -113,9 +145,20 @@ export function Game3D({ g, setGame, onQuit }: Props) {
 
   const walk = (t: Omit<WalkTarget, 'nonce'>, byKeke = false) => {
     if (busy) return;
+    if (occupiedUntil) {
+      setToast({ text: `${g.asleep ? 'You are asleep' : 'You are busy'} until ${clockLabel(occupiedUntil)}.`, ok: false });
+      return;
+    }
     setMenu(null);
     setTalk(null);
     setPlaces(false);
+    if (byKeke && online && (t.place || t.point)) {
+      void online.send({ kind: 'ride' }).then((r) => {
+        if (r && !r.ok) setToast({ text: r.text, ok: false });
+        else setTarget({ ...t, ride: true, nonce: Date.now() });
+      });
+      return;
+    }
     if (byKeke && (t.place || t.point)) {
       const paid = payRide(g);
       if (!paid.ok) {
@@ -132,10 +175,27 @@ export function Game3D({ g, setGame, onQuit }: Props) {
   const arrive = (place: PlaceId, lot: number | null) => {
     setGame(goTo(g, place, lot));
     setMenu({ place, lot });
+    if (online) void online.send({ kind: 'goto', place, lot });
   };
 
   const run = (a: DayAction) => {
     if (busy) return;
+    if (online && menu) {
+      // The world decides; the answer comes back with the new state of things.
+      setBusy(true);
+      const before = g.player.money;
+      const where = menu;
+      setMenu(null);
+      void online.send({ kind: 'act', id: a.id, place: where.place, lot: where.lot }).then((r) => {
+        setBusy(false);
+        if (!r) return setToast({ text: 'Could not reach the game server. Try again.', ok: false });
+        setToast({ text: r.text, ok: r.ok });
+        if (!r.ok) return setMenu(where);
+        const dm = gRef.current.player.money - before;
+        if (Math.abs(dm) >= 500) addFloats([{ text: `${dm > 0 ? '+' : '−'}${naira(Math.abs(dm))}`, tone: dm > 0 ? 'good' : 'bad' }]);
+      });
+      return;
+    }
     const r = doAction(g, a.id);
     if (!r.ok) {
       setToast({ text: r.text, ok: false });
@@ -180,6 +240,12 @@ export function Game3D({ g, setGame, onQuit }: Props) {
 
   const chat = (id: number) => {
     if (busy) return;
+    if (online) {
+      if (g.humans.includes(id)) return setToast({ text: `That is ${g.people[id].name}, another player.`, ok: true });
+      setMenu(null);
+      void online.send({ kind: 'talk', person: id }).then((r) => r && setTalk({ id, line: r.text }));
+      return;
+    }
     const r = talkTo(g, id);
     setGame(r.game);
     setMenu(null);
@@ -188,6 +254,10 @@ export function Game3D({ g, setGame, onQuit }: Props) {
 
   const hireThem = (bizId: number) => {
     if (!talk) return;
+    if (online) {
+      void online.send({ kind: 'hire', business: bizId, person: talk.id }).then((r) => r && setTalk({ ...talk, note: r.text }));
+      return;
+    }
     const r = hireTalent(g, bizId, talk.id);
     setGame(r.game);
     setTalk({ ...talk, note: r.text });
@@ -207,10 +277,10 @@ export function Game3D({ g, setGame, onQuit }: Props) {
   return (
     <div className={`g3d${menu && !busy ? ' menu-open' : ''}`}>
       <div className="g3d-canvas">
-        <World g={g} clock={clock} busy={busy} target={target} selected={menu} floats={floats} onWalk={(w) => walk(w)} onArrive={arrive} onTalk={chat} track={track} />
+        <World g={g} clock={clock} busy={busy || !!(occupiedUntil && !g.asleep)} target={target} selected={menu} floats={floats} onWalk={(w) => walk(w)} onArrive={arrive} onTalk={chat} track={track} />
       </div>
 
-      <Clock g={g} clock={clock} speed={speed} setSpeed={setSpeed} onQuit={onQuit} />
+      <Clock g={g} clock={clock} speed={speed} setSpeed={setSpeed} onQuit={onQuit} online={online} />
       <Wallet g={g} />
       <Minimap g={g} track={track} selected={menu} onWalk={(w) => walk(w, ride)} />
       <Needs g={g} />
@@ -222,6 +292,11 @@ export function Game3D({ g, setGame, onQuit }: Props) {
         <button className="round-btn" onClick={() => walk({ place: 'home' }, ride)} title={ride ? 'Ride home' : 'Walk home'}>
           🏠<span>Home</span>
         </button>
+        {online && g.player.paper && g.player.paper.week !== g.player.paperSeen && g.phase === 'day' && (
+          <button className="round-btn paper-btn" onClick={() => setPaperOpen(true)} title="Last week's paper">
+            📰<span>Paper</span>
+          </button>
+        )}
         <button className="round-btn phone-btn" onClick={() => setPhone('home')} title="Open your phone">
           📱<span>Phone</span>
           {g.news.filter((n) => n.week === g.week - 1).length > 0 && <i className="badge">{g.news.filter((n) => n.week === g.week - 1).length}</i>}
@@ -269,9 +344,12 @@ export function Game3D({ g, setGame, onQuit }: Props) {
               </button>
             )}
           </div>
-          <button className="btn btn-small" onClick={() => setGame(routineWeek(g))} title="Work, eat and sleep on routine until Sunday">
-            ⏩ Routine for the rest of the week
-          </button>
+          {!online && (
+            <button className="btn btn-small" onClick={() => setGame(routineWeek(g))} title="Work, eat and sleep on routine until Sunday">
+              ⏩ Routine for the rest of the week
+            </button>
+          )}
+          {online && <p className="muted" style={{ margin: 0, fontSize: 12.5 }}>When you are away, your character keeps going on its own: work, meals and sleep.</p>}
         </div>
       )}
 
@@ -283,6 +361,20 @@ export function Game3D({ g, setGame, onQuit }: Props) {
           ⏳ {clockLabel(span[0])} → {clockLabel(span[1])}
         </div>
       )}
+      {!busy && occupiedUntil && online && (
+        <div className="busy-pill">
+          {g.asleep ? '💤 Asleep' : '⏳ Busy'} until {clockLabel(occupiedUntil)} · {Math.max(1, Math.round((occupiedUntil - liveAbs(g, online)) / online.rate))} min
+        </div>
+      )}
+      {paperOpen && g.player.paper && (
+        <WeekReport
+          g={{ ...g, report: g.player.paper }}
+          onContinue={() => {
+            setPaperOpen(false);
+            void online?.send({ kind: 'paperSeen' });
+          }}
+        />
+      )}
       {fade && <div className="night-fade">{fade}</div>}
       {phone && <Phone g={g} app={phone} setApp={setPhone} onClose={() => setPhone(null)} onWalk={(p) => { setPhone(null); walk({ place: p }, ride); }} />}
       {isRainySeason(g.week) && <div className="weather-chip">🌧️ Rainy season</div>}
@@ -290,7 +382,7 @@ export function Game3D({ g, setGame, onQuit }: Props) {
   );
 }
 
-function Clock({ g, clock, speed, setSpeed, onQuit }: { g: Game; clock: React.MutableRefObject<number>; speed: number; setSpeed: (s: number) => void; onQuit: () => void }) {
+function Clock({ g, clock, speed, setSpeed, onQuit, online }: { g: Game; clock: React.MutableRefObject<number>; speed: number; setSpeed: (s: number) => void; onQuit: () => void; online?: Online }) {
   // The clock face reads the running clock a few times a second without re-rendering the world.
   const [minute, setMinute] = useState(clock.current);
   useEffect(() => {
@@ -320,13 +412,19 @@ function Clock({ g, clock, speed, setSpeed, onQuit }: { g: Game; clock: React.Mu
             <i key={i} className={i < g.day ? 'done' : i === g.day ? 'now' : ''} />
           ))}
         </div>
-        <div className="speed" role="radiogroup" aria-label="Game speed">
-          {SPEEDS.map((_, i) => (
-            <button key={i} role="radio" aria-checked={speed === i} className={speed === i ? 'on' : ''} onClick={() => setSpeed(i)} title={SPEED_LABELS[i]} aria-label={SPEED_LABELS[i]}>
-              {i === 0 ? '⏸' : '▶'.repeat(i)}
-            </button>
-          ))}
-        </div>
+        {online ? (
+          <div className="live-chip" title="The shared world runs on its own clock">
+            <span className="dot" aria-hidden="true" /> Live world · {online.count} online
+          </div>
+        ) : (
+          <div className="speed" role="radiogroup" aria-label="Game speed">
+            {SPEEDS.map((_, i) => (
+              <button key={i} role="radio" aria-checked={speed === i} className={speed === i ? 'on' : ''} onClick={() => setSpeed(i)} title={SPEED_LABELS[i]} aria-label={SPEED_LABELS[i]}>
+                {i === 0 ? '⏸' : '▶'.repeat(i)}
+              </button>
+            ))}
+          </div>
+        )}
         <div className="kicker" style={{ marginTop: 3 }}>
           📍 {here.nick}, {stateById(here.state).name}
         </div>
@@ -354,7 +452,7 @@ function Wallet({ g }: { g: Game }) {
 
 function Needs({ g }: { g: Game }) {
   const p = g.player;
-  const me = g.people[PLAYER];
+  const me = g.people[g.me];
   const bars: [string, string, number, string][] = [
     ['⚡', 'Energy', p.energy, '#f2b705'],
     ['🍲', 'Food', p.hunger, '#e0782a'],

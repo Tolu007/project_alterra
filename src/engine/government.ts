@@ -3,7 +3,8 @@ import { tradeById } from '../data/trades';
 import { LGAS, STATES, lgaById, stateById, type StateId } from '../data/world';
 import { approval, clamp, minWageFactor, nationalDemand, okadaBanned } from './economy';
 import { chance, pick } from './rng';
-import { PLAYER, type Game, type Gov, type GovLedger } from './types';
+import { humanOf, isHuman } from './seats';
+import type { Game, Gov, GovLedger } from './types';
 
 // ───────────── tuning ─────────────
 
@@ -72,7 +73,7 @@ const LGA_WANTS: Record<LeaderStyle, Partial<LgaPolicy> | null> = {
 
 /** AI leaders drift towards their preferred policies, a lever or two a month. Returns news lines. */
 function steer<P extends object>(g: Game, gov: Gov<P>, wants: Partial<P> | null, describe: (k: string, v: unknown) => string | null): string[] {
-  if (!wants || gov.leader === PLAYER) return [];
+  if (!wants || isHuman(g, gov.leader)) return [];
   const out: string[] = [];
   for (const [k, v] of Object.entries(wants)) {
     const cur = (gov.policy as Record<string, unknown>)[k];
@@ -145,13 +146,13 @@ export function monthlyGovernment(g: Game): string[] {
 
   // AI policy moves first, so this month's budget reflects them.
   news.push(...steer(g, g.fed, FED_WANTS[g.fed.style], (k, v) => describeFed(g, k, v)));
-  if (g.fed.leader !== PLAYER && g.fed.style === 'reformer') {
+  if (!isHuman(g, g.fed.leader) && g.fed.style === 'reformer') {
     fp.mpr = Math.round(clamp(15 + m.inflation * 45, 14, 32));
   }
   for (const st of STATES) {
     const gov = g.states[st.id];
     news.push(...steer(g, gov, STATE_WANTS[gov.style], (k, v) => describeState(st.name, k, v)));
-    if (gov.leader !== PLAYER && gov.style === 'tyrant' && chance(g, 0.12)) {
+    if (!isHuman(g, gov.leader) && gov.style === 'tyrant' && chance(g, 0.12)) {
       const target = pick(g, LGAS.filter((l) => l.state === st.id && g.demolition[l.id] <= 0));
       if (target) news.push(demolishMarket(g, target.id));
     }
@@ -162,7 +163,7 @@ export function monthlyGovernment(g: Game): string[] {
   }
 
   // Crises force hands.
-  if (fp.fx === 'peg' && m.reserves < 10 && g.fed.leader !== PLAYER) {
+  if (fp.fx === 'peg' && m.reserves < 10 && !isHuman(g, g.fed.leader)) {
     fp.fx = 'float';
     news.push('Reserves run dry. CBN abandons the peg; naira crashes overnight');
   }
@@ -263,7 +264,8 @@ function stateDemand(g: Game, s: StateId): number {
 
 /** Cash in, wages, debt, then the discretionary lines. Mutates the government and the world. */
 function runBudget(g: Game, gov: Gov<unknown>, led: GovLedger, level: Level, costScale: number) {
-  const isPlayer = gov.leader === PLAYER;
+  const isPlayer = isHuman(g, gov.leader);
+  const ruler = humanOf(g, gov.leader);
   gov.treasury += led.revenue + led.borrowed;
 
   // Wages: the style (or the player) decides what share actually gets paid.
@@ -296,8 +298,8 @@ function runBudget(g: Game, gov: Gov<unknown>, led: GovLedger, level: Level, cos
       const taken = amount * (isPlayer ? 1 : MISC_LOOT[gov.style]);
       led.looted += taken;
       gov.loot += taken;
-      if (isPlayer) g.player.loot += taken * 1e9;
-      if (isPlayer) g.player.money += taken * 1e9;
+      if (ruler) ruler.loot += taken * 1e9;
+      if (ruler) ruler.money += taken * 1e9;
     } else if (line.id === 'palliatives') {
       distributeRelief(g, level, gov.id, amount);
     } else {

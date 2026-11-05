@@ -11,9 +11,10 @@ import { chance } from './rng';
 import { npcLine } from './talk';
 import { cultureNews, resolveCulture, scheduleCulture } from './culture';
 import { npcWeek } from './npc';
-import { DAY_END, DAY_START, DAYS_PER_WEEK, PLAYER, type Game, type News, type Snapshot, type WeekReport } from './types';
+import { DAY_END, DAY_START, DAYS_PER_WEEK, type Game, type News, type Snapshot, type WeekReport } from './types';
+import { absNow, eachSeat, isHuman } from './seats';
 import { clamp, okadaBanned } from './economy';
-import { hire, staffCap, wageWeekly } from './business';
+import { hire, settleBusinesses, staffCap, wageWeekly } from './business';
 
 // Every exported function takes a game and returns a new one; the UI never sees a mutation.
 const clone = (g: Game): Game => structuredClone(g);
@@ -56,13 +57,18 @@ export function doAction(g0: Game, id: string): { game: Game; text: string; ok: 
 }
 
 /** Does an allowed action to `g` in place (check actionBlocked first). */
-function applyAction(g: Game, id: string): string {
+export function applyAction(g: Game, id: string): string {
   const text = act(g, id);
   if (g.ending) {
     g.phase = 'over';
     return text;
   }
+  if (id === 'sleep' && g.shared) {
+    goToBed(g);
+    return text;
+  }
   if (id === 'sleep') return text + takingsNote(endDay(g, true));
+  if (g.shared) return text;
   if (g.minute >= DAY_END) return `${text} Then you fell asleep where you sat.${takingsNote(endDay(g, false))}`;
   return text;
 }
@@ -81,6 +87,26 @@ function runClock(g: Game, minutes: number): string | null {
   passTime(g, Math.min(minutes, DAY_END - g.minute));
   if (g.minute >= DAY_END) return `It is 2am. You passed out before you got to bed.${takingsNote(endDay(g, false))}`;
   return null;
+}
+
+/**
+ * In a shared world, going to bed: you sleep until 6am if it is before midnight (six hours if later), and get back
+ * energy for the hours you sleep. The world does not wait; your character is simply asleep until then.
+ */
+export function goToBed(g: Game) {
+  const p = g.player;
+  const now = absNow(g);
+  const bed = g.minute;
+  const wake = bed < DAY_START || bed > 24 * 60 ? now + 6 * 60 : now + (24 * 60 + DAY_START - bed);
+  const hours = (wake - now) / 60;
+  p.hunger = clamp(p.hunger - hours * 1.2, 0, 100);
+  p.social = clamp(p.social - 3, 0, 100);
+  p.energy = clamp(p.energy + hours * 7.5 + (p.hasGenerator ? 4 : 0), 0, 100);
+  p.health = clamp(p.health + (p.hunger > 20 ? 1 : -3), 0, 100);
+  g.asleep = true;
+  g.busyUntil = wake;
+  g.place = 'home';
+  g.lot = null;
 }
 
 /**
@@ -112,7 +138,7 @@ function endDay(g: Game, inBed: boolean): number {
 export function hireTalent(g0: Game, bizId: number, person: number): { game: Game; text: string } {
   const b0 = g0.businesses.find((x) => x.id === bizId);
   const who = g0.people[person];
-  if (!b0 || !who || who.employer !== null || who.office || person === PLAYER) return { game: g0, text: 'They are not available.' };
+  if (!b0 || !who || who.employer !== null || who.office || isHuman(g0, person)) return { game: g0, text: 'They are not available.' };
   if (b0.staff.length >= staffCap(b0)) return { game: g0, text: 'That business has no free positions. Expand first.' };
   if (g0.player.money < wageWeekly(g0, b0) * 2) return { game: g0, text: 'You need two weeks of wages in hand.' };
   const g = clone(g0);
@@ -124,7 +150,7 @@ export function hireTalent(g0: Game, bizId: number, person: number): { game: Gam
 /** A quick chat: no time cost, once per person per day. */
 export function talkTo(g0: Game, person: number): { game: Game; line: string } {
   const who = g0.people[person];
-  if (!who || person === PLAYER) return { game: g0, line: '' };
+  if (!who || person === g0.me) return { game: g0, line: '' };
   const g = clone(g0);
   const line = npcLine(g, g.people[person]);
   if (!g.talked.includes(person)) {
@@ -180,6 +206,7 @@ function snapshot(g: Game): Snapshot {
     const ls = LGAS.filter((l) => l.state === s);
     return ls.reduce((a, l) => a + g.fares[l.id], 0) / ls.length;
   };
+  const p = g.me >= 0 ? g.player : null;
   return {
     week: g.week,
     fx: g.macro.fxParallel,
@@ -189,41 +216,67 @@ function snapshot(g: Game): Snapshot {
     fare: per(avgFare),
     grid: per((s) => g.prices[s].grid),
     approval: { fed: g.fed.approval, state: per((s) => g.states[s].approval) },
-    money: g.player.money,
-    income: g.player.lastWeek.filter((l) => l.amount > 0).reduce((a, l) => a + l.amount, 0),
+    money: p?.money ?? 0,
+    income: p ? p.lastWeek.filter((l) => l.amount > 0).reduce((a, l) => a + l.amount, 0) : 0,
   };
 }
 
+/**
+ * Sunday: the economy, governments, businesses and elections move once for the world, then each player gets
+ * their own week (money, events, the paper). In a shared world the calendar moves on at once; each player
+ * reads their paper whenever they next look.
+ */
 function endWeek(g: Game) {
-  const home = g.player.home;
-  const st = lgaById(home).state;
-  const before = { petrol: g.prices[st].petrol, rice: g.prices[st].rice, fare: g.fares[home], fx: g.macro.fxParallel, grid: g.prices[st].grid };
+  const shared = !!g.shared;
+  type Before = { petrol: number; rice: number; fare: number; fx: number; grid: number };
+  const before = new Map<number, Before>();
+  eachSeat(g, (s) => {
+    // Anyone still sitting on last week's paper gets it filed for them.
+    if (shared && g.phase !== 'day') settleInbox(g);
+    const home = g.player.home;
+    const st = lgaById(home).state;
+    before.set(s.id, { petrol: g.prices[st].petrol, rice: g.prices[st].rice, fare: g.fares[home], fx: g.macro.fxParallel, grid: g.prices[st].grid });
+  });
   const headlines: News[] = [];
   const WEIGHT: Record<News['scope'], number> = { federal: 4, state: 3, lga: 2, life: 2.5, world: 2 };
   const say = (text: string, tone: News['tone'], scope: News['scope'], where?: string, kind: News['kind'] = scope === 'life' ? 'life' : 'politics', weight = WEIGHT[scope]) =>
     headlines.push({ week: g.week, text, tone, scope, where, kind, weight });
+  const mine = new Map<number, News[]>();
+  const personal = (id: number, text: string) => {
+    if (!mine.has(id)) mine.set(id, []);
+    mine.get(id)!.push({ week: g.week, text, tone: 'neutral', scope: 'life', kind: 'life', weight: 2.5 });
+  };
+  const avgPetrol = () => STATES.reduce((a, s) => a + g.prices[s.id].petrol, 0) / STATES.length;
+  const petrolBefore = avgPetrol();
+  const fxBefore = g.macro.fxParallel;
 
-  for (const s of STATES) delete g.flags[`strike:${s.id}`];
+  for (const s of STATES) delete g.wflags[`strike:${s.id}`];
   accrueSubsidy(g);
   updateMacro(g);
   updatePrices(g);
   updateCohorts(g);
   updateSatisfaction(g);
   weeklyGovernment(g);
-  for (const line of weeklyLife(g)) say(line, 'neutral', 'life');
+  // Business takings were paid out night by night; this only closes the books.
+  settleBusinesses(g);
+  eachSeat(g, (s) => {
+    for (const line of weeklyLife(g)) personal(s.id, line);
+  });
   headlines.push(...npcWeek(g), ...cultureNews(g));
 
   if (isMonthEnd(g.week)) {
     const p4 = g.macro.priceHistory[Math.max(0, g.macro.priceHistory.length - 5)];
     for (const line of monthlyGovernment(g)) say(line, 'neutral', 'state');
     updateRents(g, g.macro.priceLevel / p4 - 1);
-    if (g.player.office) g.flags.governDue = 1;
+    eachSeat(g, () => {
+      if (g.player.office) g.flags.governDue = 1;
+    });
   }
   if (isYearEnd(g.week)) g.wageIndex *= 1 + 0.6 * Math.max(0, g.macro.inflation);
 
   // Strikes: labour walks out when fuel and prices bite and the president is unpopular.
   if (g.fed.approval < 28 && g.macro.inflation > 0.25 && chance(g, 0.25)) {
-    for (const s of STATES) g.flags[`strike:${s.id}`] = 1;
+    for (const s of STATES) g.wflags[`strike:${s.id}`] = 1;
     say('NLC declares a nationwide strike over the cost of living. Roads empty, markets shut', 'bad', 'federal', undefined, 'politics', 8);
   }
   for (const s of STATES) {
@@ -242,39 +295,67 @@ function endWeek(g: Game) {
     }
   }
 
-  for (const line of weeklyElections(g)) say(line, 'neutral', 'federal');
-  for (const k of Object.keys(g.flags)) if (k.startsWith('rig:') && govById(g, k.slice(4)).termStart === g.week) delete g.flags[k];
-  if ((g.flags.relocated ?? 0) > 0) g.flags.relocated--;
+  for (const line of weeklyElections(g, personal)) say(line, 'neutral', 'federal');
+  for (const k of Object.keys(g.wflags)) if (k.startsWith('rig:') && govById(g, k.slice(4)).termStart === g.week) delete g.wflags[k];
+  eachSeat(g, () => {
+    if ((g.flags.relocated ?? 0) > 0) g.flags.relocated--;
+  });
 
-  const pr = g.prices[st];
-  if (pr.scarcity) say(`Fuel queues across ${lgaById(home).state === 'LA' ? 'Lagos' : lgaById(home).state === 'KN' ? 'Kano' : 'Rivers'}. Black market at ₦${Math.round(pr.petrol)}/litre`, 'bad', 'federal', undefined, 'economy', 6);
-  const fxMove = g.macro.fxParallel / before.fx - 1;
+  for (const s of STATES) if (g.prices[s.id].scarcity) say(`Fuel queues across ${s.name}. Black market at ₦${Math.round(g.prices[s.id].petrol)}/litre`, 'bad', 'federal', s.id, 'economy', 6);
+  const fxMove = g.macro.fxParallel / fxBefore - 1;
   if (Math.abs(fxMove) > 0.04) say(`Naira ${fxMove > 0 ? 'falls' : 'gains'} ${Math.abs(fxMove * 100).toFixed(1)}% this week: ₦${Math.round(g.macro.fxParallel)}/$`, fxMove > 0 ? 'bad' : 'good', 'federal', undefined, 'economy', 3 + Math.abs(fxMove) * 60);
-  const petrolMove = pr.petrol / before.petrol - 1;
-  if (Math.abs(petrolMove) > 0.05) say(`Petrol ${petrolMove > 0 ? 'jumps' : 'falls'} ${Math.abs(petrolMove * 100).toFixed(0)}% to ₦${Math.round(pr.petrol)} a litre`, petrolMove > 0 ? 'bad' : 'good', 'state', undefined, 'economy', 3 + Math.abs(petrolMove) * 30);
+  const petrolMove = avgPetrol() / petrolBefore - 1;
+  if (Math.abs(petrolMove) > 0.05) say(`Petrol ${petrolMove > 0 ? 'jumps' : 'falls'} ${Math.abs(petrolMove * 100).toFixed(0)}% to ₦${Math.round(avgPetrol())} a litre`, petrolMove > 0 ? 'bad' : 'good', 'state', undefined, 'economy', 3 + Math.abs(petrolMove) * 30);
 
-  scheduleEvents(g);
+  eachSeat(g, () => scheduleEvents(g));
   scheduleCulture(g, g.week + 1);
-  headlines.sort((a, b) => (b.weight ?? 1) - (a.weight ?? 1));
   g.series.push(snapshot(g));
   if (g.series.length > 520) g.series.shift();
+  headlines.sort((a, b) => (b.weight ?? 1) - (a.weight ?? 1));
 
-  const report: WeekReport = {
-    week: g.week,
-    lines: g.player.lastWeek,
-    priceMoves: [
-      { label: 'Petrol', before: before.petrol, after: pr.petrol, unit: '/litre' },
-      { label: 'Bag of rice', before: before.rice, after: pr.rice, unit: '' },
-      { label: 'Bus fare', before: before.fare, after: g.fares[home], unit: '/trip' },
-      { label: 'Dollar', before: before.fx, after: g.macro.fxParallel, unit: '' },
-      { label: 'Light', before: before.grid, after: pr.grid, unit: 'h/day' },
-    ],
-    headlines,
-  };
-  g.report = report;
+  eachSeat(g, (s) => {
+    const b = before.get(s.id)!;
+    const home = g.player.home;
+    const pr = g.prices[lgaById(home).state];
+    const own = mine.get(s.id) ?? [];
+    const report: WeekReport = {
+      week: g.week,
+      lines: g.player.lastWeek,
+      priceMoves: [
+        { label: 'Petrol', before: b.petrol, after: pr.petrol, unit: '/litre' },
+        { label: 'Bag of rice', before: b.rice, after: pr.rice, unit: '' },
+        { label: 'Bus fare', before: b.fare, after: g.fares[home], unit: '/trip' },
+        { label: 'Dollar', before: b.fx, after: g.macro.fxParallel, unit: '' },
+        { label: 'Light', before: b.grid, after: pr.grid, unit: 'h/day' },
+      ],
+      headlines: [...own, ...headlines].sort((x, y) => (y.weight ?? 1) - (x.weight ?? 1)),
+    };
+    g.report = report;
+    g.player.paper = report;
+    // Your own week stays private in a shared world; alone, it goes on your news feed too.
+    if (!shared) g.news.push(...own);
+    g.phase = g.ending ? 'over' : 'week';
+  });
   g.news.push(...headlines);
   if (g.news.length > 300) g.news.splice(0, g.news.length - 300);
-  g.phase = g.ending ? 'over' : 'week';
+}
+
+/** Sunday for a shared world (the caller turns the calendar). */
+export const endWeekShared = (g: Game) => endWeek(g);
+
+/** Files a player's paper and answers their events with the first choice that is open, so their week can go on. */
+export function settleInbox(g: Game) {
+  for (let guard = 0; guard < 30 && g.phase !== 'day' && g.phase !== 'over'; guard++) {
+    if (g.phase === 'event' && g.currentEvent && g.outcome === null) {
+      const choices = eventById(g.currentEvent.id).choices(g, g.currentEvent);
+      const pickOne = choices.find((c) => !c.blocked) ?? choices[0];
+      g.outcome = pickOne ? pickOne.apply() : '';
+      continue;
+    }
+    if (g.phase === 'govern') delete g.flags.governDue;
+    if (g.phase === 'election') g.showElection = null;
+    nextStep(g);
+  }
 }
 
 function nextStep(g: Game) {
@@ -299,10 +380,13 @@ function nextStep(g: Game) {
     g.phase = 'election';
     return;
   }
-  g.week++;
-  g.day = 0;
   g.report = null;
   g.phase = 'day';
+  // Alone, the new week starts when you have read your paper. In a shared world it already has.
+  if (!g.shared) {
+    g.week++;
+    g.day = 0;
+  }
 }
 
 export function continueReport(g0: Game): Game {

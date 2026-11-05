@@ -1,3 +1,5 @@
+import { packGame } from '../engine/seats';
+import { bind } from '../engine/seats';
 import { upgradeSave } from '../engine/setup';
 import type { Game } from '../engine/types';
 
@@ -9,7 +11,12 @@ export function loadGame(): Game | null {
     const raw = localStorage.getItem(KEY);
     if (!raw) return null;
     const g = JSON.parse(raw) as Game;
-    return g.version === 2 ? upgradeSave(g) : null;
+    if (g.version !== 2) return null;
+    if (g.seats?.length) {
+      g.me = -1;
+      bind(g, g.seats[0].id);
+    }
+    return upgradeSave(g);
   } catch {
     return null;
   }
@@ -17,7 +24,7 @@ export function loadGame(): Game | null {
 
 export function saveGame(g: Game | null) {
   try {
-    if (g) localStorage.setItem(KEY, JSON.stringify(g));
+    if (g) localStorage.setItem(KEY, packGame(g));
     else localStorage.removeItem(KEY);
   } catch {
     /* ignore */
