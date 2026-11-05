@@ -52,17 +52,18 @@ ok(r.status === 409, 'you cannot make a second character while the first is aliv
 
 r = await a('/world/act', { intent: { kind: 'act', id: 'cook', place: 'home', lot: null } });
 ok(r.json.result?.ok === true && r.json.game.busyUntil > 0, `Ada cooks: "${r.json.result?.text}"`);
+const cooked = r.json.game.busyUntil;
 r = await a('/world/act', { intent: { kind: 'act', id: 'nap', place: 'home', lot: null } });
-ok(r.json.result?.ok === false && /Busy/.test(r.json.result.text), 'and is busy until she is done');
+ok(r.json.result?.ok === true && r.json.game.busyUntil > cooked, 'and naps straight after, no waiting: her own clock runs ahead');
 r = await a('/world/act', { intent: { kind: 'act', id: 'cook', place: 'palace', lot: null } });
 ok(r.json.result?.ok === false, 'you cannot act at a place that is not in your LGA');
 
 // Getting around: a danfo from the bus stop along the real roads, and no new trip while still on the road.
 r = await b('/world/act', { intent: { kind: 'act', id: 'travel:OSH', place: 'busstop', lot: null } });
 if (r.json.result?.ok) ok(r.json.game.player.at === 'OSH' && r.json.game.place === 'busstop' && r.json.game.busyUntil > 0, `Tunde takes a danfo to Oshodi: "${r.json.result.text}"`);
-else ok(/Closed|Asleep|Busy/.test(r.json.result?.text ?? ''), `no danfo right now: "${r.json.result?.text}"`);
+else ok(/Closed|Asleep|day is done/.test(r.json.result?.text ?? ''), `no danfo right now: "${r.json.result?.text}"`);
 r = await b('/world/act', { intent: { kind: 'act', id: 'travel:ETI:taxi', place: r.json.game.place, lot: null } });
-ok(r.json.result?.ok === false, `and cannot book a car while still on the road: "${r.json.result?.text}"`);
+ok(r.json.result?.ok === true || /Closed|Asleep|day is done|money/.test(r.json.result?.text ?? ''), `and books a car on to Lekki straight away: "${r.json.result?.text}"`);
 
 const v = r.json.version;
 r = await b(`/world?v=${v}`);

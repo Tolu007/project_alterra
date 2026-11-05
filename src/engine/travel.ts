@@ -7,6 +7,7 @@ import city from '../data/city/lagos.json';
 import type { PlaceId } from '../data/trades';
 import { LGAS, lgaById, lgasOf, stateById, type StateId } from '../data/world';
 import { clockLabel } from './calendar';
+import { ownMinute } from './seats';
 import type { Game } from './types';
 
 export type Mode = 'danfo' | 'brt' | 'rail' | 'ferry' | 'taxi' | 'bus' | 'flight';
@@ -87,7 +88,7 @@ export function parseTrip(id: string, from: string): { to: string; mode: Mode } 
 export function tripsFrom(g: Game, from = g.player.at): Trip[] {
   const here = lgaById(from);
   const out: Trip[] = [];
-  const now = g.minute;
+  const now = ownMinute(g);
   const rush = rushFactor(now);
   const fare = g.fares[from];
   const P = g.macro.priceLevel;

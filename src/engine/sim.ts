@@ -12,7 +12,7 @@ import { npcLine } from './talk';
 import { cultureNews, resolveCulture, scheduleCulture } from './culture';
 import { npcWeek } from './npc';
 import { DAY_END, DAY_START, DAYS_PER_WEEK, type Game, type News, type Snapshot, type WeekReport } from './types';
-import { absNow, eachSeat, isHuman } from './seats';
+import { absNow, eachSeat, isHuman, onOwnClock } from './seats';
 import { clamp, okadaBanned } from './economy';
 import { hire, settleBusinesses, staffCap, wageWeekly } from './business';
 
@@ -58,6 +58,11 @@ export function doAction(g0: Game, id: string): { game: Game; text: string; ok: 
 
 /** Does an allowed action to `g` in place (check actionBlocked first). */
 export function applyAction(g: Game, id: string): string {
+  // In a shared world the action starts on your own clock (where your last one ended), not the world's.
+  return onOwnClock(g, () => applyHere(g, id));
+}
+
+function applyHere(g: Game, id: string): string {
   const text = act(g, id);
   if (g.ending) {
     g.phase = 'over';

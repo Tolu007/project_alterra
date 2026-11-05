@@ -48,9 +48,11 @@ a different stage.
 - **One world, one clock:** the server owns the world. Its clock runs in real time at
   `WORLD_RATE` game minutes per real minute: 12 by default, which makes a game hour five real
   minutes, a game day two hours and a game year about a month. Nobody can pause or speed it up.
-- **Actions take real time:** a four-hour shift keeps your character busy for 20 real minutes.
-  You can look around and use your phone meanwhile, and the screen counts down. Going to bed
-  puts you to sleep until 6am world time.
+- **Actions take no real time:** a four-hour shift is done the moment you take it, as offline.
+  Your own clock jumps four hours ahead of the world's (the screen shows both), and your next
+  action starts where the last one ended, so opening hours and closing time still apply. When
+  your own clock reaches 2am your day is done: go to bed, and you sleep until the world reaches
+  morning. Asleep is the only time you wait.
 - **When you are away:** your character goes on without you. It reads the paper, answers
   events with the first sensible choice, eats, goes to work or to its business, and sleeps.
   Last week's paper waits for you when you come back.

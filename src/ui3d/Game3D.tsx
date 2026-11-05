@@ -9,7 +9,8 @@ import { officeTitle } from '../engine/elections';
 import { HOURS, actionsAt, naira, placesIn, rideHailActions, type DayAction } from '../engine/life';
 import { COLS, MAIN_Z, PAVEMENT, ROAD_X, ROAD_Z, ROWS, SIDE_HALF, halfWidth, hood, type Pt } from '../engine/map';
 import { advanceClock, doAction, goTo, hireTalent, payRide, peek, rideFare, routineWeek, talkTo } from '../engine/sim';
-import { DAYS_PER_WEEK, type Game } from '../engine/types';
+import { ownMinute } from '../engine/seats';
+import { DAY_END, DAYS_PER_WEEK, type Game } from '../engine/types';
 import type { Intent } from '../engine/world';
 import { WeekReport } from '../ui/Modals';
 import { Portrait } from '../ui/Portrait';
@@ -43,6 +44,8 @@ interface Props {
 /** The shared world's clock as this screen sees it: minutes after midnight, continuing past the last update. */
 const liveMinute = (g: Game, o: Online) => g.minute + o.lag + ((Date.now() - o.serverNow) / 60_000) * o.rate;
 const liveAbs = (g: Game, o: Online) => (g.week * DAYS_PER_WEEK + g.day) * 1440 + liveMinute(g, o);
+/** Online, your own clock: the world's, or later when your last action ran ahead of it. */
+const ownLive = (g: Game, o: Online) => Math.max(liveMinute(g, o), g.asleep ? 0 : g.busyUntil - (g.week * DAYS_PER_WEEK + g.day) * 1440);
 
 export function Game3D({ g, setGame, onQuit, online }: Props) {
   const [target, setTarget] = useState<WalkTarget | null>(null);
@@ -82,7 +85,9 @@ export function Game3D({ g, setGame, onQuit, online }: Props) {
     const t = window.setInterval(() => setTick((x) => x + 1), 1000);
     return () => window.clearInterval(t);
   }, [online]);
-  const occupiedUntil = online && g.busyUntil > liveAbs(g, online) ? g.busyUntil : null;
+  // Online you only ever wait while asleep; otherwise each action just moves your own clock on.
+  const asleepUntil = online && g.asleep && g.busyUntil > liveAbs(g, online) ? g.busyUntil : null;
+  const dayDone = !!online && !asleepUntil && ownLive(g, online) >= DAY_END;
 
   useEffect(() => () => timers.current.forEach((t) => window.clearTimeout(t)), []);
   useEffect(() => {
@@ -100,7 +105,9 @@ export function Game3D({ g, setGame, onQuit, online }: Props) {
       const o = onlineRef.current;
       if (o) {
         // The server keeps time; between updates the clock runs on at the world's speed.
-        clock.current = liveMinute(gg, o);
+        // Your own clock: the world's time, or ahead of it after an action, gliding forward when it jumps.
+        const want = ownLive(gg, o);
+        clock.current = want - clock.current > 2 ? clock.current + (want - clock.current) * Math.min(1, dt * 3) : want;
       } else if (a) {
         // Fast-forward while an action plays out.
         const k = Math.min(1, (now - a.t0) / a.ms);
@@ -141,8 +148,8 @@ export function Game3D({ g, setGame, onQuit, online }: Props) {
 
   const walk = (t: Omit<WalkTarget, 'nonce'>, byKeke = false) => {
     if (busy) return;
-    if (occupiedUntil) {
-      setToast({ text: `${g.asleep ? 'You are asleep' : 'You are busy'} until ${clockLabel(occupiedUntil)}.`, ok: false });
+    if (asleepUntil) {
+      setToast({ text: `You are asleep until ${clockLabel(asleepUntil)}.`, ok: false });
       return;
     }
     setMenu(null);
@@ -174,10 +181,10 @@ export function Game3D({ g, setGame, onQuit, online }: Props) {
     if (online) void online.send({ kind: 'goto', place, lot });
   };
 
-  /** Shows the route on the map while you travel: a few seconds here, the whole trip in the shared world. */
+  /** Shows the route on the map for a few seconds while you travel. */
   const showTrip = (a: DayAction, from: string) => {
     if (!a.id.startsWith('travel:')) return;
-    setTrip({ id: a.id, from, t0: Date.now(), ms: online ? Math.max(4000, (a.minutes / online.rate) * 60_000) : 4200, minutes: a.minutes });
+    setTrip({ id: a.id, from, t0: Date.now(), ms: 4200, minutes: a.minutes });
   };
 
   const run = (a: DayAction, where: Selection | null = menu) => {
@@ -290,7 +297,7 @@ export function Game3D({ g, setGame, onQuit, online }: Props) {
   return (
     <div className={`g3d${menu && !busy ? ' menu-open' : ''}`}>
       <div className="g3d-canvas">
-        <World g={g} clock={clock} busy={busy || !!(occupiedUntil && !g.asleep)} target={target} selected={menu} floats={floats} onWalk={(w) => walk(w)} onArrive={arrive} onTalk={chat} track={track} />
+        <World g={g} clock={clock} busy={busy} target={target} selected={menu} floats={floats} onWalk={(w) => walk(w)} onArrive={arrive} onTalk={chat} track={track} />
       </div>
 
       <Clock g={g} clock={clock} speed={speed} setSpeed={setSpeed} onQuit={onQuit} online={online} />
@@ -374,11 +381,12 @@ export function Game3D({ g, setGame, onQuit, online }: Props) {
           ⏳ {clockLabel(span[0])} → {clockLabel(span[1])}
         </div>
       )}
-      {!busy && occupiedUntil && online && (
+      {!busy && asleepUntil && online && (
         <div className="busy-pill">
-          {g.asleep ? '💤 Asleep' : '⏳ Busy'} until {clockLabel(occupiedUntil)} · {Math.max(1, Math.round((occupiedUntil - liveAbs(g, online)) / online.rate))} min
+          💤 Asleep until {clockLabel(asleepUntil)} · {Math.max(1, Math.round((asleepUntil - liveAbs(g, online)) / online.rate))} min
         </div>
       )}
+      {!busy && dayDone && <div className="busy-pill">🌙 Your day is done. Go home to bed; the world catches up while you sleep.</div>}
       {paperOpen && g.player.paper && (
         <WeekReport
           g={{ ...g, report: g.player.paper }}
@@ -439,6 +447,7 @@ function Clock({ g, clock, speed, setSpeed, onQuit, online }: { g: Game; clock: 
             ))}
           </div>
         )}
+        {online && minute - liveMinute(g, online) > 10 && <div className="kicker">World time {clockLabel(liveMinute(g, online))}</div>}
         <div className="kicker" style={{ marginTop: 3 }}>
           📍 {here.nick}, {stateById(here.state).name}
         </div>
@@ -513,7 +522,7 @@ function ActionMenu({ g, sel, actions, onRun, onClose }: { g: Game; sel: Selecti
           <div className="am-title">{title}</div>
           {sub && <div className="am-sub">{sub}</div>}
           <div className="kicker">
-            {clockLabel(g.minute)} · {sel.place === 'home' || sel.place === 'clinic' ? 'Open all hours' : `Open ${clockLabel(open * 60)}–${clockLabel(close * 60)}`}
+            {clockLabel(ownMinute(g))} · {sel.place === 'home' || sel.place === 'clinic' ? 'Open all hours' : `Open ${clockLabel(open * 60)}–${clockLabel(close * 60)}`}
           </div>
         </div>
         <button className="x-btn" onClick={onClose} aria-label="Close">

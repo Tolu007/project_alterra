@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { actionsAt } from './life';
-import { absNow, bind, packGame, seatOf, unbind, unpackGame } from './seats';
+import { absNow, bind, ownAbs, packGame, seatOf, unbind, unpackGame } from './seats';
 import { holdElectionForTest } from './testHooks';
 import { createSharedWorld, joinWorld, tickWorld } from './world';
 import { applyAction, peek } from './sim';
 import { avatarLooks } from './testLooks';
-import type { Game } from './types';
+import { DAY_END, type Game } from './types';
 
 const T0 = Date.UTC(2026, 10, 5, 8);
 const MIN = 60_000;
@@ -45,7 +45,7 @@ describe('a shared world', () => {
     expect(g.businesses.some((x) => x.owner === b)).toBe(false);
   });
 
-  it('an action makes you busy until it is done, instead of skipping time for everyone', () => {
+  it('actions take no real time: your own clock runs ahead of the world until it catches up', () => {
     const { g, a, b } = world();
     bind(g, a);
     const biz = g.businesses.find((x) => x.owner === a)!;
@@ -54,19 +54,41 @@ describe('a shared world', () => {
     const before = absNow(g);
     const money = g.player.money;
     applyAction(g, `bw:${biz.id}`);
+    // The world's clock did not move, yours did: four hours on.
     expect(absNow(g)).toBe(before);
-    expect(g.busyUntil).toBe(before + 240);
+    expect(ownAbs(g)).toBe(before + 240);
     expect(g.player.money).toBeGreaterThan(money);
-    expect(actionsAt(peek(g, 'lot', biz.plot), 'lot').every((x) => x.blocked?.startsWith('Busy'))).toBe(true);
-    // The other player is free.
+    // No waiting: the next thing starts where the shift ended.
+    g.place = 'market';
+    g.lot = null;
+    const eat = actionsAt(peek(g, 'market'), 'market').find((x) => x.id === 'eat')!;
+    expect(eat.blocked).toBeFalsy();
+    applyAction(g, 'eat');
+    expect(ownAbs(g)).toBe(before + 240 + eat.minutes);
+    // The other player is on the world's time.
     bind(g, b);
+    expect(ownAbs(g)).toBe(absNow(g));
     expect(actionsAt(peek(g, 'home'), 'home').some((x) => !x.blocked)).toBe(true);
-    // Twenty real minutes later the shift is over.
-    online(g, a, T0 + 20 * MIN);
-    online(g, b, T0 + 20 * MIN);
-    tickWorld(g, T0 + 20 * MIN);
+    // Once the world catches up, your clock is the world's again.
+    online(g, a, T0 + 30 * MIN);
+    online(g, b, T0 + 30 * MIN);
+    tickWorld(g, T0 + 30 * MIN);
     bind(g, a);
-    expect(g.busyUntil).toBeLessThanOrEqual(absNow(g));
+    expect(ownAbs(g)).toBe(absNow(g));
+  });
+
+  it('your day ends at 2am on your own clock: then only bed, and you sleep until the world reaches morning', () => {
+    const { g, a } = world();
+    bind(g, a);
+    // A long day of running ahead: your clock is past 2am while the world's is still in the morning.
+    g.busyUntil = absNow(g) - g.minute + DAY_END + 5;
+    expect(actionsAt(peek(g, 'market'), 'market').every((x) => x.blocked?.startsWith('Your day is done'))).toBe(true);
+    g.place = 'home';
+    expect(actionsAt(peek(g, 'home'), 'home').find((x) => x.id === 'sleep')?.blocked).toBeFalsy();
+    applyAction(g, 'sleep');
+    expect(g.asleep).toBe(true);
+    expect(g.busyUntil).toBeGreaterThan(absNow(g) - g.minute + DAY_END);
+    expect(actionsAt(peek(g, 'home'), 'home').every((x) => x.blocked?.startsWith('Asleep'))).toBe(true);
   });
 
   it('players who are away live on autopilot: they work, eat, sleep and get paid', () => {

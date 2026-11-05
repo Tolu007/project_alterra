@@ -17,7 +17,7 @@ async function player(name, email, home, kind) {
   await page.goto(base, { waitUntil: 'networkidle' });
   return { page, name, email, home };
 }
-const shot = (p, n) => p.page.screenshot({ path: `${out}/online-${n}.png` });
+const shot = (p, n) => p.page.screenshot({ path: `${out}/online-${n}.png`, timeout: 120000 });
 
 async function signUpAndJoin(p, nick, start) {
   const { page } = p;
@@ -48,17 +48,22 @@ await shot(b, '02-tunde-joined-mobile');
 await a.page.waitForTimeout(6000);
 await shot(a, '03-ada-sees-tunde');
 
-// Ada works her shift: she is busy, and the clock does not jump.
+// Ada works her shift: no waiting. Her own clock jumps four hours ahead of the world, and she goes straight on.
 await a.page.locator('.hud-br').getByRole('button', { name: /places/i }).click();
 await a.page.locator('.places-pop .chip-own').first().click();
-await a.page.waitForSelector('.action-menu', { timeout: 40000 });
+await a.page.waitForSelector('.action-menu', { timeout: 150000 });
 await a.page.waitForTimeout(500);
 await shot(a, '04-ada-menu');
 const work = a.page.locator('.am-item:not([disabled])', { hasText: /Work at your/ }).first();
 if (await work.count()) {
   await work.click();
   await a.page.waitForTimeout(2500);
-  await shot(a, '05-ada-busy');
+  await shot(a, '05-ada-after-shift');
+  await a.page.locator('.hud-br').getByRole('button', { name: /places/i }).click();
+  await a.page.locator('.places-pop .chip', { hasText: /^Market/ }).first().click();
+  await a.page.waitForSelector('.action-menu', { timeout: 90000 });
+  await a.page.waitForTimeout(800);
+  await shot(a, '05b-ada-goes-on');
 }
 
 // The admin sees both online.

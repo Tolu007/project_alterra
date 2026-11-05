@@ -8,12 +8,12 @@ import { govById, levelOf } from './government';
 import { BIZ, WAGES, bizType, type BizType, type BizTypeId } from '../data/businesses';
 import { businessOn, businessValue, fire, growCost, hire, isMobile, needsFarmland, openBlocked, openBusiness, openCost, playerBusinesses, sellBusiness, settleDay, stageName, staffCap, starterShift, wageWeekly, weeklyPnL } from './business';
 import { hood } from './map';
-import { absNow, humanOf, isHuman } from './seats';
+import { absNow, humanOf, isHuman, ownAbs } from './seats';
 import { attend, eventsHere, isOn } from './culture';
 import { buyout, buyoutPrice, rivalsNote } from './npc';
 import { between, chance, pick } from './rng';
 import { MODES, parseTrip, tripDetail, tripLabel, tripsFrom } from './travel';
-import { WEEKS_PER_YEAR, type Business, type Game, type Housing, type Player } from './types';
+import { DAY_END, WEEKS_PER_YEAR, type Business, type Game, type Housing, type Player } from './types';
 
 export const HOUSING: Record<Housing, { name: string; rent: number; energy: number }> = {
   family: { name: 'Family house', rent: 0, energy: 0.4 },
@@ -89,6 +89,8 @@ const isShift = (id: string) => id === 'work' || id === 'oddjobs' || id.startsWi
 
 export function isOpen(g: Game, place: PlaceId): boolean {
   const [a, b] = HOURS[place];
+  // Open all hours (home, the clinic): never closed, even past 2am on your own clock.
+  if (a === 0 && b >= 26) return true;
   const m = g.minute;
   return (m >= a * 60 && m < b * 60) || (b > 24 && m + 1440 < b * 60);
 }
@@ -197,8 +199,23 @@ function needsFor(g: Game, trade: TradeId): string | null {
 
 const atHome = (g: Game) => g.player.at === g.player.home;
 
-/** Everything the player can do at a place today. */
-export function actionsAt(g: Game, place: PlaceId): DayAction[] {
+/** A read-only view of the game at your own time, for working out what you can do. */
+const ownView = (g: Game): Game => {
+  const ahead = ownAbs(g) - absNow(g);
+  return ahead > 0 ? { ...g, minute: g.minute + ahead } : g;
+};
+
+/** Why nothing can be done right now in a shared world (asleep, or your day is used up), or null. */
+function occupiedNote(g: Game, id: string): string | null {
+  if (!g.shared) return null;
+  if (g.asleep && g.busyUntil > absNow(g)) return `Asleep until ${clockLabel(g.busyUntil)}.`;
+  if (g.minute >= DAY_END && id !== 'sleep') return 'Your day is done. Go home to bed: by the time you wake, the world will have caught up.';
+  return null;
+}
+
+/** Everything the player can do at a place today, at your own time. */
+export function actionsAt(g0: Game, place: PlaceId): DayAction[] {
+  const g = ownView(g0);
   const p = g.player;
   const t = tradeById(p.trade);
   const here = lgaById(p.at);
@@ -342,9 +359,9 @@ export function actionsAt(g: Game, place: PlaceId): DayAction[] {
   }
   const open = isOpen(g, place);
   const closesIn = HOURS[place][1] * 60 - g.minute;
-  // In a shared world you cannot start something new while you are still busy or asleep.
-  const occupied = g.shared && g.busyUntil > absNow(g) ? `${g.asleep ? 'Asleep' : 'Busy'} until ${clockLabel(g.busyUntil)}.` : null;
   return out.map((a) => {
+    // In a shared world you can always act next, except asleep or once your day is used up.
+    const occupied = occupiedNote(g, a.id);
     let minutes = a.minutes ?? durationOf(a.id);
     // Shifts end when the place closes.
     if (isShift(a.id)) minutes = Math.max(0, Math.min(minutes, closesIn));
@@ -530,8 +547,9 @@ function travelActions(g: Game, place: PlaceId): Draft[] {
 }
 
 /** Ride-hailing cars, booked on the phone from wherever you are. */
-export function rideHailActions(g: Game): DayAction[] {
-  const occupied = g.shared && g.busyUntil > absNow(g) ? `${g.asleep ? 'Asleep' : 'Busy'} until ${clockLabel(g.busyUntil)}.` : null;
+export function rideHailActions(g0: Game): DayAction[] {
+  const g = ownView(g0);
+  const occupied = occupiedNote(g, 'taxi');
   return tripsFrom(g)
     .filter((t) => t.mode === 'taxi')
     .map((t) => ({ id: t.id, label: tripLabel(t), detail: tripDetail(t), cost: t.cost, energy: t.energy, minutes: t.minutes, tone: 'rest' as const, blocked: occupied ?? t.blocked ?? (g.player.money < t.cost ? 'Not enough money.' : null) }));

@@ -99,11 +99,12 @@ describe('the shared world over HTTP', () => {
     const versions = all.map((r) => r.json.version);
     expect(new Set(versions).size).toBe(versions.length);
     expect(Math.max(...versions) - start).toBeGreaterThanOrEqual(10);
-    // An action makes you busy; a second one waits.
+    // Actions take no real time: a second one goes straight through, starting where the first ended.
     const cook = await a('/world/act', { intent: { kind: 'act', id: 'cook', place: 'home', lot: null } });
     expect(cook.json.result.ok).toBe(true);
     const nap = await a('/world/act', { intent: { kind: 'act', id: 'nap', place: 'home', lot: null } });
-    expect(nap.json.result.ok).toBe(false);
+    expect(nap.json.result.ok).toBe(true);
+    expect(nap.json.game.busyUntil).toBeGreaterThan(cook.json.game.busyUntil);
     // Polling with the version you have costs almost nothing.
     const v = (await a('/world')).json.version;
     const same = await a(`/world?v=${v}`);
