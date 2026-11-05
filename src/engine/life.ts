@@ -1,6 +1,6 @@
 import { PARTIES, partyById, type Level, type PartyId } from '../data/politics';
 import { PLACES, TRADES, tradeById, type PerkId, type PlaceId, type Skill } from '../data/trades';
-import { lgaById, lgasOf, stateById, type TradeId } from '../data/world';
+import { lgaById, stateById, type TradeId } from '../data/world';
 import { clockLabel, inCampaign, inPrimaries, isMonthEnd, isWorkday, weekOfYear } from './calendar';
 import { clamp, localDemand, okadaBanned, tradeIncome } from './economy';
 import { FORM_PRICE, formBlocked, jurisdictionLgas, officeFor } from './elections';
@@ -12,6 +12,7 @@ import { absNow, humanOf, isHuman } from './seats';
 import { attend, eventsHere, isOn } from './culture';
 import { buyout, buyoutPrice, rivalsNote } from './npc';
 import { between, chance, pick } from './rng';
+import { MODES, parseTrip, tripDetail, tripLabel, tripsFrom } from './travel';
 import { WEEKS_PER_YEAR, type Business, type Game, type Housing, type Player } from './types';
 
 export const HOUSING: Record<Housing, { name: string; rent: number; energy: number }> = {
@@ -68,6 +69,8 @@ export const HOURS: Record<PlaceId, [number, number]> = {
   govhouse: [8, 18],
   palace: [9, 17],
   venue: [10, 26],
+  airport: [5, 22],
+  jetty: [6, 20],
 };
 
 /** Minutes each action takes; anything not listed takes an hour. */
@@ -179,6 +182,8 @@ export function placesIn(lga: string): PlaceId[] {
   out.push('skills', 'joint', 'venue', 'party', 'clinic', 'bank');
   if (st.capitalLga === lga) out.push('govhouse');
   if (l.palace) out.push('palace');
+  if (l.jetty) out.push('jetty');
+  if (l.airport) out.push('airport');
   return out;
 }
 
@@ -231,7 +236,13 @@ export function actionsAt(g: Game, place: PlaceId): DayAction[] {
 
   switch (place) {
     case 'busstop':
-      out.push(...travelActions(g, 'state'));
+      out.push(...travelActions(g, 'busstop'));
+      break;
+    case 'jetty':
+      out.push(...travelActions(g, 'jetty'));
+      break;
+    case 'airport':
+      out.push(...travelActions(g, 'airport'));
       break;
     case 'home':
       out.push({ id: 'sleep', label: g.minute >= 24 * 60 ? 'Go to bed (it is late)' : 'Go to bed', detail: g.minute < 22 * 60 ? 'Sleep through to 6am. An early night means a full recharge.' : g.minute < 24 * 60 ? 'Up at 6am.' : 'Six hours of sleep; you will wake up late.', energy: 0, minutes: 0, tone: 'rest' });
@@ -252,7 +263,7 @@ export function actionsAt(g: Game, place: PlaceId): DayAction[] {
       }
       for (const b of playerBusinesses(g)) if (b.lga === p.at && isMobile(b.type)) out.push(...ownedActions(g, b, tired));
       for (const t of BIZ) if (isMobile(t.id)) out.push(...openOffer(g, t, -1));
-      out.push(...travelActions(g, 'interstate'));
+      out.push(...travelActions(g, 'park'));
       if (p.campaign?.stage === 'nominee' && campaignHere(g)) {
         out.push(campaignAction(g, 'campaign:rally', 'Hold a rally', 'Canopies, music, branded rice and a crowd.', 1));
         out.push(campaignAction(g, 'campaign:union', 'Meet the transport union', 'The union can move drivers and passengers.', 0.4));
@@ -511,24 +522,24 @@ function campaignAction(g: Game, id: string, label: string, detail: string, weig
   return { id, label, detail, cost, energy: -20, blocked: g.player.money < cost ? 'Not enough money.' : null, tone: 'politics' };
 }
 
-function travelActions(g: Game, scope: 'state' | 'interstate'): Draft[] {
-  const p = g.player;
-  const here = lgaById(p.at);
-  const out: Draft[] = [];
-  if (scope === 'state') {
-    for (const l of lgasOf(here.state)) {
-      if (l.id === p.at) continue;
-      out.push({ id: `travel:${l.id}`, label: `Danfo to ${l.nick}`, detail: `${l.name}. ${l.landmark}.`, cost: Math.round(g.fares[p.at] * 2), energy: -6, tone: 'rest' });
-    }
-    return out;
-  }
-  for (const st of ['LA', 'KN', 'RI'] as const) {
-    if (st === here.state) continue;
-    const target = stateById(st).capitalLga;
-    const cost = Math.round((here.state === 'KN' || st === 'KN' ? 38_000 : 26_000) * Math.pow(P(g), 0.8) * (g.prices[here.state].petrol / g.ref.petrol[here.state]) ** 0.5);
-    out.push({ id: `travel:${target}`, label: `Bus to ${stateById(st).name}`, detail: `Ten hours on the road to ${stateById(st).capital}.`, cost, energy: -20, minutes: 600, blocked: g.minute > 9 * 60 ? 'Long-distance buses leave before 9am.' : null, tone: 'rest' });
-  }
-  return out;
+/** Trips that leave from this place. */
+function travelActions(g: Game, place: PlaceId): Draft[] {
+  return tripsFrom(g)
+    .filter((t) => t.board === place)
+    .map((t) => ({ id: t.id, label: tripLabel(t), detail: tripDetail(t), cost: t.cost, energy: t.energy, minutes: t.minutes, blocked: t.blocked, tone: 'rest' as const }));
+}
+
+/** Ride-hailing cars, booked on the phone from wherever you are. */
+export function rideHailActions(g: Game): DayAction[] {
+  const occupied = g.shared && g.busyUntil > absNow(g) ? `${g.asleep ? 'Asleep' : 'Busy'} until ${clockLabel(g.busyUntil)}.` : null;
+  return tripsFrom(g)
+    .filter((t) => t.mode === 'taxi')
+    .map((t) => ({ id: t.id, label: tripLabel(t), detail: tripDetail(t), cost: t.cost, energy: t.energy, minutes: t.minutes, tone: 'rest' as const, blocked: occupied ?? t.blocked ?? (g.player.money < t.cost ? 'Not enough money.' : null) }));
+}
+
+/** An action available here, or a ride booked on the phone. */
+function findAction(g: Game, id: string): DayAction | undefined {
+  return actionsAt(g, g.place).find((x) => x.id === id) ?? (id.endsWith(':taxi') ? rideHailActions(g).find((x) => x.id === id) : undefined);
 }
 
 function partyActions(g: Game): Draft[] {
@@ -597,7 +608,7 @@ export const japaCost = (g: Game) => Math.round(8_000_000 * (g.macro.fxParallel 
 /** Applies one day's action (check actionBlocked first). Mutates `g`; returns what happened. */
 /** Checks an action is allowed here and now; null when it is. */
 export function actionBlocked(g: Game, id: string): string | null {
-  const a = actionsAt(g, g.place).find((x) => x.id === id);
+  const a = findAction(g, id);
   if (!a) return 'You can’t do that here.';
   return a.blocked ?? null;
 }
@@ -605,7 +616,7 @@ export function actionBlocked(g: Game, id: string): string | null {
 export function act(g: Game, id: string): string {
   const p = g.player;
   const t = tradeById(p.trade);
-  const a = actionsAt(g, g.place).find((x) => x.id === id)!;
+  const a = findAction(g, id)!;
 
   if (a.cost) ledger(g, a.label, -a.cost);
   // One round trip a day covers every errand away from home.
@@ -865,11 +876,14 @@ export function act(g: Game, id: string): string {
     return `You bought a ${kind} and found a rider. Remittance every Sunday, by God’s grace.`;
   }
   if (id.startsWith('travel:')) {
-    const to = id.slice(7);
+    const trip = parseTrip(id, here)!;
+    const to = trip.to;
     p.at = to;
-    g.place = lgaById(to).state === lgaById(here).state ? 'busstop' : 'park';
+    const arrive = MODES[trip.mode].arrive;
+    g.place = placesIn(to).includes(arrive) ? arrive : 'busstop';
     g.lot = null;
-    return `You arrive in ${lgaById(to).nick}.`;
+    const where = g.place === 'airport' ? lgaById(to).airport : g.place === 'jetty' ? lgaById(to).jetty : g.place === 'park' ? 'the motor park' : 'the bus stop';
+    return `You arrive in ${lgaById(to).nick}${where ? `, at ${where}` : ''}.`;
   }
   if (id === 'usd:buy') {
     const naira0 = p.money / 2;

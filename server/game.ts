@@ -1,6 +1,6 @@
 import { LGAS } from '../src/data/world';
 import { bind, packGame, publicSeats, seatOf, unbind, unpackGame } from '../src/engine/seats';
-import { startOptions, type NewLife } from '../src/engine/setup';
+import { migrateMap, startOptions, type NewLife } from '../src/engine/setup';
 import { chooseEvent, closeElection, continueEvent, continueReport, doAction, hireTalent, payRide, peek, submitGovern, talkTo, type GovernPlan } from '../src/engine/sim';
 import type { Game, Looks } from '../src/engine/types';
 import { AWAY_MS, DEFAULT_RATE, createSharedWorld, joinWorld, minutesDue, tickWorld, validPlace, type Intent } from '../src/engine/world';
@@ -16,7 +16,7 @@ const ONLINE_MS = 90_000;
 
 let cache: { version: number; g: Game } | null = null;
 
-const parse = (json: string) => unpackGame(json, null);
+const parse = (json: string) => migrateMap(unpackGame(json, null));
 
 /** Locks the world, brings it up to now, lets `fn` change it, and saves. */
 async function mutate<T>(store: Store, fn: (g: Game) => { game?: Game; out: T }): Promise<{ out: T; version: number; g: Game }> {

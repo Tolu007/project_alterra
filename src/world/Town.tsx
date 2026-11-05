@@ -523,7 +523,8 @@ export function VacantLot({ plot }: { plot: Plot }) {
 // ───────────── street landmarks ─────────────
 
 export function BusStop({ lga, name, lightsOn }: { lga: string; name: string; lightsOn: boolean }) {
-  const [x, z] = hood(lga).busStop;
+  const h = hood(lga);
+  const [x, z] = h.busStop;
   const waiting = useMemo(() => {
     const rnd = seeded(`bus:${lga}`);
     return Array.from({ length: 3 }, (_, i) => ({
@@ -533,7 +534,7 @@ export function BusStop({ lga, name, lightsOn }: { lga: string; name: string; li
     }));
   }, [lga]);
   return (
-    <group position={[x, 0, z]}>
+    <group position={[x, 0, z]} rotation={[0, h.busRot, 0]}>
       {[-2.6, 2.6].map((px) => (
         <Box key={px} p={[px, 1.4, 0.6]} s={[0.15, 2.8, 0.15]} c="#3a3a3a" />
       ))}
@@ -561,17 +562,21 @@ export function BusStop({ lga, name, lightsOn }: { lga: string; name: string; li
   );
 }
 
-/** A pedestrian bridge over the main road, with stairs down to both pavements. */
-export function FootBridge({ lga }: { lga: string }) {
-  const x = hood(lga).bridgeX;
+/**
+ * A pedestrian bridge over the main road, with stairs down to both pavements. In the grid towns it crosses
+ * the main road; elsewhere give it the road's centre, the bridge's turn (its deck runs along local z) and the span.
+ */
+export function FootBridge({ lga, at }: { lga: string; at?: { x: number; z: number; rot: number; span: number } }) {
+  const x = at?.x ?? hood(lga).bridgeX;
   const deckY = 5.6;
-  const span = (MAIN_HALF + PAVEMENT) * 2 - 1;
+  const span = at?.span ?? (MAIN_HALF + PAVEMENT) * 2 - 1;
+  const half = span / 2 - PAVEMENT + 1.1;
   const run = 10;
   const len = Math.hypot(run, deckY);
   const tilt = Math.atan2(deckY, run);
   const sign = useMemo(() => signTexture('USE THE BRIDGE · SAVE YOUR LIFE', '#1e8f5a', '#ffffff'), []);
   return (
-    <group position={[x, 0, 0]}>
+    <group position={[x, 0, at?.z ?? 0]} rotation={[0, at?.rot ?? 0, 0]}>
       <Box p={[0, deckY, 0]} s={[2.2, 0.4, span]} c="#9a9488" />
       {[-1.05, 1.05].map((s) => (
         <Box key={s} p={[s, deckY + 0.7, 0]} s={[0.08, 1, span]} c="#2f63ad" />
@@ -582,7 +587,7 @@ export function FootBridge({ lga }: { lga: string }) {
       </mesh>
       {[-1, 1].map((s) => (
         <group key={s}>
-          <Box p={[0, deckY / 2, s * (MAIN_HALF + 0.6)]} s={[0.5, deckY, 0.5]} c="#9a9488" />
+          <Box p={[0, deckY / 2, s * half]} s={[0.5, deckY, 0.5]} c="#9a9488" />
           {/* Stairs run along the pavement, down and away from the deck. */}
           <mesh position={[(-s * run) / 2, deckY / 2, s * (span / 2 - 1)]} rotation={[0, 0, s * tilt]} material={mat('#9a9488')} castShadow>
             <boxGeometry args={[len, 0.35, 1.8]} />

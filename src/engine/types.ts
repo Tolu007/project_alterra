@@ -400,6 +400,8 @@ export interface PublicSeat {
 
 export interface Game {
   version: 2;
+  /** Which layout of the towns business plots refer to (see MAP_VERSION). Missing in old saves. */
+  mapVersion?: number;
   seed: number;
   rng: number;
   /** Everyone with a character in this world, and the one whose life is bound below. -1 when none is. */

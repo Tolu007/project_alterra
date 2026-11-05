@@ -125,6 +125,16 @@ const nationalShapes = Object.fromEntries(
   }),
 );
 
+// Cities on the long-distance routes, and the three airports, for the travel map.
+const CITIES = {
+  Lagos: [6.5244, 3.3792], Ibadan: [7.3775, 3.947], Ilorin: [8.4966, 4.5426], Jebba: [9.1333, 4.8333], Mokwa: [9.2949, 5.0541],
+  Kaduna: [10.5105, 7.4165], Zaria: [11.0855, 7.7199], Kano: [12.0022, 8.592], Abuja: [9.0765, 7.3986], Makurdi: [7.7322, 8.5391],
+  Enugu: [6.4584, 7.5464], Aba: [5.1066, 7.3667], Ore: [6.7456, 4.8737], 'Benin City': [6.335, 5.6037], Onitsha: [6.1413, 6.8029],
+  Owerri: [5.4836, 7.0333], 'Port Harcourt': [4.8156, 7.0498],
+  'airport:LA': [6.5774, 3.3212], 'airport:KN': [12.0476, 8.5246], 'airport:RI': [5.0155, 6.9496],
+};
+const cityPoints = Object.fromEntries(Object.entries(CITIES).map(([k, [lat, lon]]) => [k, national([lon, lat]).map(r1)]));
+
 // Close-ups.
 const SW = 800;
 const SH = 560;
@@ -149,6 +159,9 @@ export const NIGERIA_W = ${NW};
 export const NIGERIA_H = ${NH};
 export const STATE_W = ${SW};
 export const STATE_H = ${SH};
+
+/** Cities on the long-distance routes and the three airports ("airport:LA"…), on the overview map. */
+export const NIGERIA_CITIES: Record<string, [number, number]> = ${JSON.stringify(cityPoints)};
 
 /** Every state and the FCT, for the overview map. */
 export const NIGERIA: Record<string, { d: string; cx: number; cy: number }> = ${JSON.stringify(nationalShapes)};

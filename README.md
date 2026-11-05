@@ -87,15 +87,40 @@ where function storage is temporary.
 
 ## Playing
 
-- **The neighbourhood:** each LGA is a small town: a main road with a median and lamp posts,
+- **Lagos is the real Lagos:** each of the seven Lagos LGAs is a district three to seven
+  kilometres across, drawn from OpenStreetMap: its real streets, expressways, bridges, railway,
+  lagoon and creeks, parks and industrial land, in their true places (shrunk about four to five
+  times, so a walk across takes a minute or so). The places you use are the real ones where the
+  map has them: Computer Village is Ikeja's market, the Ikeja Bus Terminal its motor park and
+  Murtala Muhammed's domestic terminals its airport; Oshodi's motor park is the Transport
+  Interchange; Lagos Island has Jankara Market, the Marina ferry terminal, Tafawa Balewa Square
+  and Iga Idunganran; Yaba has Tejuosho, Yabatech and Herbert Macaulay Way; Ikorodu has Sabo
+  Market, the bus terminal, the Oba's palace and the ferry terminal on the lagoon. Famous buildings
+  (Tinubu Square, the National Museum, Freedom Park, Unilag, the Nigerian Law School, mosques
+  and cathedrals) stand
+  where they are, with their names. Ordinary buildings along the streets and the sea of rooftops
+  behind them are generated. Street names show as you pass, and the bus stop is the real stop on
+  the real road, with a footbridge over it.
+- **Kano and Rivers** still use small invented towns: a main road with a median and lamp posts,
   side streets on a grid, open gutters, a bus stop, a footbridge, billboards and a filling
-  station showing today's petrol price. The places you use stand on plots along the roads,
-  among houses, flats, churches, mosques, kiosks and abandoned buildings. Walk anywhere, or
-  take a keke (an okada where it is not banned) for a small fare and no time. The minimap and
-  the Places list take you straight to a place. Buildings between you and the camera sink out
-  of the way.
-- **Getting around Nigeria:** danfos to the other LGAs in your state leave from the bus stop.
-  Long-distance buses to other states leave from the motor park, in the morning.
+  station showing today's petrol price. Their real maps come next.
+- **Walking:** places stand on plots along the roads, among houses, flats, churches, mosques,
+  kiosks and abandoned buildings. Walk anywhere (on the pavement, crossing where people cross),
+  or take a keke (an okada where it is not banned) for a small fare and no time. The minimap
+  follows you through the streets; open it out to see the whole district and tap a place to go
+  there. Buildings between you and the camera sink out of the way.
+- **Getting around Lagos:** from the bus stop, danfos go to every other district along the real
+  roads (Ikorodu to Lagos Island is 33 km via Ikorodu Road and Third Mainland Bridge), and rush
+  hour makes them crawl. The BRT runs where its corridors do (Ikorodu–Yaba–Lagos Island,
+  Oshodi–Ikeja) and skips most of the go-slow; the Red Line train links Ikeja, Oshodi and Yaba
+  with no traffic at all. Ferries cross the lagoon between Ikorodu, the Marina, Apapa and Falomo.
+  A ride-hailing car comes to wherever you are, door to door, at a price that surges with the
+  traffic.
+- **Getting to Kano and Port Harcourt:** long-distance buses leave the motor park in the morning
+  (15 hours to Kano via Ibadan, Ilorin and Kaduna; 10 to Port Harcourt via Benin and Onitsha).
+  Flights leave Murtala Muhammed in Ikeja for Mallam Aminu Kano and Port Harcourt International:
+  dearer, and three hours door to door. The phone's Travel app shows Lagos and Nigeria on maps,
+  every way there with its time and fare, and walks you to where it leaves from.
 - **Time:** the clock runs. At normal speed a game minute passes every half second of real
   time, and you can pause or speed it up. Walking takes time. Actions take as long as they
   take: a shift at your stall is four hours, a day at the office eight, lunch at a buka forty
@@ -154,8 +179,8 @@ where function storage is temporary.
   people, and employing people builds influence. Bigger (formal) businesses pay wages tied to
   the minimum wage policy. Small starter businesses pay what the street pays: about half of
   what someone in that trade earns locally.
-- **The phone** has bank alerts, your businesses' P&L, prices with charts, government, contacts,
-  news and the map.
+- **The phone** has the Travel app, bank alerts, your businesses' P&L, prices with charts,
+  government, contacts, news and the map. While you travel, the route is drawn on the map.
 
 ## How the world works
 
@@ -175,10 +200,21 @@ where function storage is temporary.
   - `npc.ts`: everyone else's businesses and jobs. `culture.ts`: premieres, shows, matches and
     festivals. Both have their own random streams, so they do not change the dice for the rest of
     the world.
-- `src/engine/map.ts`: the neighbourhood of each LGA as data: road grid, plots, which place or
-  lot is on which plot, doors, and walking routes along the pavements. The rules use it to know
-  which plots can be leased; the 3D world uses it to know where things stand.
-- `src/world/`: the 3D town, built with react-three-fiber. `Town.tsx` has the roads, lamps,
+- `src/engine/map.ts`: the neighbourhood of each LGA as data: plots, which place or lot is on
+  which plot, doors and walking routes. Lagos districts come from `src/data/city/lagos.json`;
+  the rest from the grid generator. The rules use it to know which plots can be leased; the 3D
+  world uses it to know where things stand. `streets.ts` is the walking network of a real
+  district (pavements, crossings, A* routes); `travel.ts` is every way of travelling, with
+  times and fares from the real road distances and the hour.
+- The Lagos map is built ahead of time: `node scripts/fetch-city.mjs` downloads each district
+  from OpenStreetMap's Overpass API into `data/osm/` (not committed), and
+  `node scripts/build-city.mjs` turns it into `src/data/city/`: the rules' plots and places,
+  one drawing file per district (loaded when you first go there) and the Lagos-wide travel map.
+  `scripts/city-districts.mjs` says what area each district covers and which real places stand
+  for which game places; `node scripts/draw-city.mjs OSH` draws a district to check it.
+- `src/world/`: the 3D town, built with react-three-fiber. `City.tsx` draws a real district
+  (merged road and water meshes, instanced buildings, rooftops, trees and lamps, landmarks,
+  traffic and people on the real roads). `Town.tsx` has the grid towns' roads, lamps,
   filler buildings, vacant plots, bus stop, footbridge and billboards. `BizBuildings.tsx` has your
   businesses at each stage. There are also regional building styles, people with walk cycles,
   traffic on every road, a danfo that stops at the bus stop, day/night light, rain and
@@ -207,9 +243,22 @@ where function storage is temporary.
   are real.
 - **The central bank answers to the president**, and presidential elections are plurality wins.
 - **No religion mechanics** and no ethnic modifiers.
-- **The neighbourhoods are invented layouts.** Each LGA gets the same kind of grid town, three
-  blocks by three, dressed in its region's style. The street plans do not copy any real street,
-  and the LGA's real landmarks are named rather than modelled. Lagos main roads get BRT buses.
+- **Lagos districts are real places, not whole LGAs.** Each covers a few square kilometres around
+  the LGA's best-known centre (Oshodi interchange, Ikeja and Alausa, Lagos Island, Yaba, Victoria
+  Island and Ikoyi, Apapa, Ikorodu town), shrunk about four to five times. Roads, water, the railway and
+  landmarks are where the map puts them; the buildings along the streets, the rooftops behind
+  them and their heights are generated, and landmark buildings are generic models of their kind.
+  Where the map has no real place for a game place (a skills centre, a party office), it goes on
+  a street near the bus stop. Some districts reach past their LGA's edge (Oshodi's takes in
+  Ladipo Market, which is in Mushin).
+- **Kano and Rivers are still invented layouts:** the same kind of grid town, three blocks by
+  three, dressed in each region's style, with real landmarks named rather than modelled.
+- **Travel is simplified:** danfo, BRT, train and ferry fares and times come from the real road
+  distances, a rush-hour curve and the game's fares, not from timetables. BRT buses and trains
+  board at the bus stop. Interstate buses leave from any motor park and arrive at the state
+  capital's park; flights are direct. Kano's airport is placed in Fagge, beside Sabon Gari (it
+  sits just north of it), and Port Harcourt's in Obio/Akpor (it is in Omagwa, Ikwerre). The
+  ride-hailing car is a generic service, not any real company.
 - **Side streets are laterite (red earth) until the council keeps the roads up** (road quality
   45 and above); potholes follow road quality too. Kano's old city and farm towns keep earth
   roads.
@@ -238,3 +287,8 @@ where function storage is temporary.
 
 State boundaries: [geoBoundaries](https://www.geoboundaries.org/) gbOpen NGA ADM1 (source:
 GRID3), CC BY 4.0.
+
+Lagos map data © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors, available
+under the [Open Database License](https://opendatacommons.org/licenses/odbl/) (ODbL). The district
+files in `src/data/city/` are derived from it and are shared under the ODbL too; the game credits
+OpenStreetMap on its maps.

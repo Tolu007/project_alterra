@@ -139,6 +139,10 @@ export interface LgaDef {
   /** What farming means here. */
   farm?: string;
   palace?: string;
+  /** The airport in or beside this LGA, if it has one. */
+  airport?: string;
+  /** The ferry jetty, if boats call here. */
+  jetty?: string;
 }
 
 export const LGAS: LgaDef[] = [
@@ -147,11 +151,13 @@ export const LGAS: LgaDef[] = [
     id: 'IKJ', name: 'Ikeja', nick: 'Ikeja', state: 'LA', lat: 6.6018, lon: 3.3515, voters: 0.9, wealth: 0.62, rent: 2_000_000, central: true,
     mix: { trader: 0.18, pos: 0.06, foodvendor: 0.07, okada: 0.04, keke: 0.03, danfo: 0.04, artisan: 0.1, teacher: 0.04, lgstaff: 0.02, office: 0.16, tech: 0.06, factory: 0.08, business: 0.05, unemployed: 0.07 },
     style: 'lagos-dense', landmark: 'Computer Village · Alausa secretariat', blurb: 'The state capital. Phone dealers, civil servants and the airport road.',
+    airport: 'Murtala Muhammed Airport, domestic terminals',
   },
   {
     id: 'LIS', name: 'Lagos Island', nick: 'Idumota', state: 'LA', lat: 6.4549, lon: 3.3947, voters: 0.7, wealth: 0.45, rent: 1_300_000, central: true,
     mix: { trader: 0.32, pos: 0.07, foodvendor: 0.08, okada: 0.04, keke: 0.03, danfo: 0.05, artisan: 0.1, teacher: 0.03, lgstaff: 0.03, office: 0.08, business: 0.07, unemployed: 0.1 },
     style: 'lagos-island', landmark: 'Balogun & Idumota markets · Iga Idunganran', blurb: 'Old Lagos. The biggest markets in West Africa and the Oba’s palace.',
+    jetty: 'Marina/CMS Ferry Terminal',
     palace: 'Iga Idunganran',
   },
   {
@@ -163,6 +169,7 @@ export const LGAS: LgaDef[] = [
     id: 'ETI', name: 'Eti-Osa', nick: 'Lekki & VI', state: 'LA', lat: 6.4474, lon: 3.481, voters: 0.9, wealth: 0.86, rent: 4_500_000, central: true,
     mix: { trader: 0.08, pos: 0.04, foodvendor: 0.06, okada: 0.04, keke: 0.04, danfo: 0.03, artisan: 0.1, teacher: 0.03, lgstaff: 0.02, office: 0.22, tech: 0.12, oil: 0.04, business: 0.1, unemployed: 0.08 },
     style: 'lagos-rich', landmark: 'Lekki toll gate · Victoria Island banks', blurb: 'Glass towers, estates, and flooding every rainy season anyway.',
+    jetty: 'Five Cowries Terminal, Falomo',
   },
   {
     id: 'OSH', name: 'Oshodi-Isolo', nick: 'Oshodi', state: 'LA', lat: 6.5355, lon: 3.3087, voters: 1.3, wealth: 0.34, rent: 900_000, central: false,
@@ -173,11 +180,13 @@ export const LGAS: LgaDef[] = [
     id: 'APP', name: 'Apapa', nick: 'Apapa', state: 'LA', lat: 6.4489, lon: 3.359, voters: 0.5, wealth: 0.44, rent: 1_000_000, central: true,
     mix: { trader: 0.12, pos: 0.05, foodvendor: 0.08, okada: 0.05, keke: 0.04, danfo: 0.06, artisan: 0.1, teacher: 0.03, lgstaff: 0.02, office: 0.1, factory: 0.12, business: 0.08, unemployed: 0.15 },
     style: 'lagos-port', landmark: 'Apapa & Tin Can ports', blurb: 'Nigeria’s front door for imports. Containers, clearing agents and tanker gridlock.',
+    jetty: 'Apapa Liverpool Jetty',
   },
   {
     id: 'IKD', name: 'Ikorodu', nick: 'Ikorodu', state: 'LA', lat: 6.6194, lon: 3.5105, voters: 1.96, wealth: 0.3, rent: 500_000, central: false,
     mix: { trader: 0.18, pos: 0.06, foodvendor: 0.07, okada: 0.1, keke: 0.08, danfo: 0.07, artisan: 0.12, farmer: 0.03, teacher: 0.05, lgstaff: 0.03, office: 0.04, factory: 0.07, business: 0.02, unemployed: 0.08 },
     style: 'lagos-dense', landmark: 'Ikorodu garage · BRT terminal', blurb: 'Where Lagos goes to afford rent. A long ride to everywhere else.',
+    jetty: 'Ikorodu Ferry Terminal',
     farm: 'Fish farming',
   },
   // ── Kano ──
@@ -191,6 +200,7 @@ export const LGAS: LgaDef[] = [
     id: 'FAG', name: 'Fagge', nick: 'Sabon Gari', state: 'KN', lat: 12.0063, lon: 8.5326, voters: 0.8, wealth: 0.4, rent: 350_000, central: true,
     mix: { trader: 0.35, pos: 0.06, foodvendor: 0.08, keke: 0.1, artisan: 0.12, teacher: 0.03, lgstaff: 0.02, office: 0.04, factory: 0.04, business: 0.08, unemployed: 0.08 },
     style: 'kano-market', landmark: 'Sabon Gari market · Singer market', blurb: 'Traders from every corner of Nigeria. If it is sold anywhere, it is sold here.',
+    airport: 'Mallam Aminu Kano International Airport',
   },
   {
     id: 'NAS', name: 'Nassarawa', nick: 'GRA & Bompai', state: 'KN', lat: 11.98, lon: 8.55, voters: 1.1, wealth: 0.6, rent: 800_000, central: true,
@@ -218,6 +228,7 @@ export const LGAS: LgaDef[] = [
     id: 'OBI', name: 'Obio/Akpor', nick: 'Rumuokoro', state: 'RI', lat: 4.85, lon: 6.99, voters: 1.2, wealth: 0.5, rent: 700_000, central: true,
     mix: { trader: 0.16, pos: 0.07, foodvendor: 0.08, keke: 0.08, okada: 0.03, artisan: 0.1, teacher: 0.06, lgstaff: 0.03, office: 0.1, tech: 0.04, oil: 0.08, factory: 0.04, business: 0.04, unemployed: 0.09 },
     style: 'ph-city', landmark: 'Rumuokoro junction · UniPort', blurb: 'The busy northern half of Port Harcourt: students, oil workers and traffic.',
+    airport: 'Port Harcourt International Airport, Omagwa',
   },
   {
     id: 'ELE', name: 'Eleme', nick: 'Eleme', state: 'RI', lat: 4.79, lon: 7.12, voters: 0.45, wealth: 0.4, rent: 500_000, central: false,

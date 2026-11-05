@@ -15,6 +15,13 @@ export const isWorkday = (day: number) => day < 5;
 export const isRainySeason = (week: number) => monthOf(week) >= 4 && monthOf(week) <= 8;
 
 /** "07:45" from minutes after midnight (past midnight wraps round). */
+/** "4h", "1h30", "45m". */
+export function duration(minutes: number): string {
+  const h = Math.floor(minutes / 60);
+  const m = Math.round(minutes % 60);
+  return h ? `${h}h${m ? String(m).padStart(2, '0') : ''}` : `${m}m`;
+}
+
 export function clockLabel(minute: number): string {
   const m = Math.floor(minute) % 1440;
   return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;

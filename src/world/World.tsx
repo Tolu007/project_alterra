@@ -16,6 +16,8 @@ import type { Game, Person } from '../engine/types';
 import { Brt, Canoe, Car, Danfo, Keke, Mover, Okada, Person3D, Truck, Walker, mat, type Pose } from './Actors';
 import { BizBuilding } from './BizBuildings';
 import { Building, earthen } from './Buildings';
+import { CityPedestrians, CityScene, CityStopDanfo, CityTraffic, LANDMARK_HEIGHT, LandmarkModel, PlaceModel, billboardSpots } from './City';
+import { useCity, type CityRender } from './cityData';
 import { labelTexture, nameTexture } from './textures';
 import { Billboard, BusStop, Filler, FootBridge, NightLights, StreetLights, Streets, Tree, VacantLot, WALLS, fillerKinds, seeded } from './Town';
 
@@ -87,16 +89,21 @@ function hasPower(g: Game): boolean {
 function facingPoint(lga: string, place: PlaceId, lot: number | null): Pt | null {
   const h = hood(lga);
   if (place === 'lot' && lot !== null && lot >= 0) return [h.plots[lot].x, h.plots[lot].z];
-  if (place === 'busstop') return [h.busStop[0], h.busStop[1] + 4];
+  if (place === 'busstop') return [h.busStop[0] + Math.sin(h.busRot) * 4, h.busStop[1] + Math.cos(h.busRot) * 4];
   const id = h.place[place];
   return id !== undefined ? [h.plots[id].x, h.plots[id].z] : null;
 }
 
 export function World(props: WorldProps) {
+  const h = hood(props.g.player.at);
+  const city = useCity(h.real ? props.g.player.at : null);
   return (
-    <Canvas flat shadows dpr={[1, 1.6]} camera={{ fov: 40, near: 0.5, far: 700, position: [20, 22, 34] }} gl={{ antialias: true }}>
-      <Scene {...props} />
-    </Canvas>
+    <>
+      <Canvas flat shadows dpr={[1, 1.6]} camera={{ fov: 40, near: 0.5, far: 700, position: [20, 22, 34] }} gl={{ antialias: true }}>
+        <Scene {...props} />
+      </Canvas>
+      {h.real && !city && <div className="map-loading">Loading the map of {h.real.name}…</div>}
+    </>
   );
 }
 
@@ -104,6 +111,9 @@ function Scene({ g, clock, busy, target, selected, floats, onWalk, onArrive, onT
   const lga = lgaById(g.player.at);
   const style = lga.style;
   const h = hood(lga.id);
+  // Districts built from real map data load their streets first; until then you stay put.
+  const city = useCity(h.real ? lga.id : null);
+  const mapReady = !h.real || !!city;
   const rainy = isRainySeason(g.week);
   const hour = (g.minute / 60) % 24;
   const night = hour >= 19.5 || hour < 5.5;
@@ -136,7 +146,7 @@ function Scene({ g, clock, busy, target, selected, floats, onWalk, onArrive, onT
   }, [spawnKey]);
 
   useEffect(() => {
-    if (!target) return;
+    if (!target || !mapReady) return;
     let to: Pt;
     if (target.place) {
       to = doorOf(lga.id, target.place, target.lot ?? null);
@@ -147,7 +157,16 @@ function Scene({ g, clock, busy, target, selected, floats, onWalk, onArrive, onT
     } else return;
     path.current = route(lga.id, [pos.current.x, pos.current.z], to).slice(1);
     setRiding(!!target.ride);
-  }, [target, lga.id]);
+    // Already standing there: open its menu straight away.
+    const d = dest.current;
+    if (d && Math.hypot(to[0] - pos.current.x, to[1] - pos.current.z) < 0.6) {
+      path.current = [];
+      dest.current = null;
+      setRiding(false);
+      onArrive(d.place, d.lot);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [target, lga.id, mapReady]);
 
   useFrame((_, dt) => {
     const p = player.current;
@@ -158,7 +177,8 @@ function Scene({ g, clock, busy, target, selected, floats, onWalk, onArrive, onT
       const dz = next[1] - pos.current.z;
       const dist = Math.hypot(dx, dz);
       const left = path.current.reduce((s, q, i) => s + (i === 0 ? dist : Math.hypot(q[0] - path.current[i - 1][0], q[1] - path.current[i - 1][1])), 0);
-      const speed = riding ? 26 : left > 40 ? 14 : 9;
+      // Long walks across a real district go at a brisk pace; rides faster still.
+      const speed = riding ? (left > 200 ? 38 : 26) : left > 150 ? 20 : left > 40 ? 14 : 9;
       if (dist < 0.2) {
         path.current.shift();
         if (!path.current.length) {
@@ -208,17 +228,32 @@ function Scene({ g, clock, busy, target, selected, floats, onWalk, onArrive, onT
       <DayLight clock={clock} rainy={rainy} playerPos={pos} ground={earthen(style) ? '#b5875a' : '#8a8577'} />
       <FollowCamera target={pos} />
 
-      <Streets lga={lga.id} style={style} roads={g.lgaInfra[lga.id].roads} onClick={walkTo as never} />
-      <StreetLights lightsOn={lightsOn} />
-      <NightLights lightsOn={lightsOn} playerPos={pos} />
-      <Backdrop style={style} lga={lga.id} lightsOn={lightsOn} />
+      {h.real ? (
+        city && <CityScene city={city} h={h} style={style} tar={g.lgaInfra[lga.id].roads >= 45} lightsOn={lightsOn} playerPos={pos} onClick={walkTo as never} />
+      ) : (
+        <>
+          <Streets lga={lga.id} style={style} roads={g.lgaInfra[lga.id].roads} onClick={walkTo as never} />
+          <StreetLights lightsOn={lightsOn} />
+          <NightLights lightsOn={lightsOn} playerPos={pos} />
+          <Backdrop style={style} lga={lga.id} lightsOn={lightsOn} />
+        </>
+      )}
 
       {(Object.entries(h.place) as [PlaceId, number][]).map(([place, id], i) => {
         const plot = h.plots[id];
         const farmPlot = plot.kind === 'farm';
+        // Airports and jetties, and the real markets and motor parks of the mapped districts, fill their whole plot.
+        const whole = place === 'airport' || place === 'jetty' || (!!plot.real && (place === 'park' || place === 'palace' || (place === 'market' && !g.demolition[g.player.at])));
+        if (whole) {
+          return (
+            <PlotGroup key={place} plot={plot} playerPos={pos} label={placeLabel(place, plot)} labelY={place === 'airport' ? 21 : 8} labelRange={90} open={place !== 'airport' && place !== 'palace'} selected={isSel(place, null)} onClick={() => onWalk({ place })}>
+              <PlaceModel kind={place} w={plot.w} d={plot.d} style={style} lit={lightsOn} sign={plot.real ?? (place === 'airport' ? lga.airport : place === 'jetty' ? lga.jetty : null) ?? PLACES[place].name} />
+            </PlotGroup>
+          );
+        }
         return (
-          <PlotGroup key={place} plot={plot} playerPos={pos} label={place === 'home' ? 'Home' : PLACES[place].name} labelY={place === 'office' ? 19 : 9.5} labelRange={70} selected={isSel(place, null)} onClick={() => onWalk({ place })}>
-            <group position={[0, 0, plot.d / 2 - (farmPlot ? 7 : 4.3)]} scale={farmPlot ? 1.5 : 1}>
+          <PlotGroup key={place} plot={plot} playerPos={pos} label={placeLabel(place, plot)} labelY={place === 'office' ? 19 : 9.5} labelRange={70} selected={isSel(place, null)} onClick={() => onWalk({ place })}>
+            <group position={[0, 0, plot.d / 2 - (farmPlot ? 7 : 4.3)]} scale={farmPlot ? 1.5 : plot.real ? 1.2 : 1}>
               <Building
                 kind={place}
                 style={style}
@@ -260,6 +295,16 @@ function Scene({ g, clock, busy, target, selected, floats, onWalk, onArrive, onT
         );
       })}
 
+      {h.real?.landmarks.map((id) => {
+        const plot = h.plots[id];
+        const lm = plot.landmark!;
+        return (
+          <PlotGroup key={`lm${id}`} plot={plot} playerPos={pos} label={lm.n} labelY={(LANDMARK_HEIGHT[lm.k] ?? 7) + 2.5} labelRange={90} onClick={() => onWalk({ point: plot.door })}>
+            <LandmarkModel kind={lm.k} w={plot.w} d={plot.d} style={style} lit={lightsOn} name={lm.n} />
+          </PlotGroup>
+        );
+      })}
+
       <group
         onClick={(e) => {
           e.stopPropagation();
@@ -267,15 +312,31 @@ function Scene({ g, clock, busy, target, selected, floats, onWalk, onArrive, onT
           onWalk({ place: 'busstop' });
         }}
       >
-        <BusStop lga={lga.id} name={lga.nick} lightsOn={lightsOn} />
-        <PlaceLabel x={h.busStop[0]} z={h.busStop[1]} y={5.2} text="Bus stop" playerPos={pos} selected={isSel('busstop', null)} />
+        <BusStop lga={lga.id} name={h.real?.stopName ?? lga.nick} lightsOn={lightsOn} />
+        <PlaceLabel x={h.busStop[0]} z={h.busStop[1]} y={5.2} text={h.real ? `${h.real.stopName} bus stop` : 'Bus stop'} playerPos={pos} selected={isSel('busstop', null)} />
       </group>
-      <FootBridge lga={lga.id} />
-      <Billboards g={g} lga={lga.id} lit={lightsOn} />
+      {h.real ? (
+        <FootBridge lga={lga.id} at={{ x: h.real.road[0] + Math.cos(h.busRot) * 14, z: h.real.road[1] - Math.sin(h.busRot) * 14, rot: h.busRot, span: h.real.span }} />
+      ) : (
+        <FootBridge lga={lga.id} />
+      )}
+      <Billboards g={g} lga={lga.id} lit={lightsOn} city={city} />
 
-      <Traffic g={g} style={style} lga={lga.id} kekeColor={kekeColor} okada={okada} />
-      <StoppingDanfo lga={lga.id} lagos={lga.state === 'LA'} kekeColor={kekeColor} />
-      <Pedestrians seed={lga.id} count={22} />
+      {h.real ? (
+        city && (
+          <>
+            <CityTraffic city={city} lagos={lga.state === 'LA'} kekeColor={kekeColor} okada={okada} playerPos={pos} />
+            <CityStopDanfo h={h} lagos={lga.state === 'LA'} kekeColor={kekeColor} />
+            <CityPedestrians city={city} h={h} playerPos={pos} />
+          </>
+        )
+      ) : (
+        <>
+          <Traffic g={g} style={style} lga={lga.id} kekeColor={kekeColor} okada={okada} />
+          <StoppingDanfo lga={lga.id} lagos={lga.state === 'LA'} kekeColor={kekeColor} />
+          <Pedestrians seed={lga.id} count={22} />
+        </>
+      )}
       <Townsfolk g={g} lga={lga.id} playerPos={pos} onTalk={onTalk} />
       {rainy && <Rain playerPos={pos} />}
 
@@ -303,6 +364,13 @@ function Scene({ g, clock, busy, target, selected, floats, onWalk, onArrive, onT
   );
 }
 
+/** What a place's floating label says: the real name where the map has one ("Computer Village"), with the kind of place for streets. */
+function placeLabel(place: PlaceId, plot: Plot): string {
+  if (place === 'home') return 'Home';
+  if (!plot.real) return PLACES[place].name;
+  return /\b(street|way|road|avenue|close|crescent|marina)\b/i.test(plot.real) ? `${PLACES[place].name}, ${plot.real}` : plot.real;
+}
+
 /** The next show at this LGA's event centre, for the poster. */
 function posterFor(g: Game, lga: string): string | null {
   const next = g.culture
@@ -316,7 +384,7 @@ function posterFor(g: Game, lga: string): string | null {
  * A plot and what stands on it. Buildings between you and the camera sink out of the way,
  * the way walls go down in a life sim, so you can always see yourself and the street.
  */
-function PlotGroup({ plot, playerPos, label, labelY = 9, labelRange = 60, own, selected, onClick, children }: { plot: Plot; playerPos: React.MutableRefObject<THREE.Vector3>; label?: string; labelY?: number; labelRange?: number; own?: boolean; selected?: boolean; onClick: () => void; children: ReactNode }) {
+function PlotGroup({ plot, playerPos, label, labelY = 9, labelRange = 60, own, open, selected, onClick, children }: { plot: Plot; playerPos: React.MutableRefObject<THREE.Vector3>; label?: string; labelY?: number; labelRange?: number; own?: boolean; /** Open stalls and sheds you can see through: never sunk. */ open?: boolean; selected?: boolean; onClick: () => void; children: ReactNode }) {
   const body = useRef<THREE.Group>(null);
   const tag = useRef<THREE.Sprite>(null);
   const { camera } = useThree();
@@ -335,7 +403,7 @@ function PlotGroup({ plot, playerPos, label, labelY = 9, labelRange = 60, own, s
     }
     // Sink it only if it actually stands between the camera and you.
     const p = playerPos.current;
-    const cut = blocks(box.current, camera.position, p);
+    const cut = !open && blocks(box.current, camera.position, p);
     const want = cut ? 0.1 : 1;
     if (Math.abs(b.scale.y - want) > 0.002) b.scale.y += (want - b.scale.y) * Math.min(1, dt * 8);
     if (tag.current) {
@@ -619,7 +687,7 @@ const ADS = [
   { head: 'SHARP SHARP DATA', sub: '10GB for the price of your akara', bg: '#2f63ad', fg: '#ffffff' },
 ];
 
-function Billboards({ g, lga, lit }: { g: Game; lga: string; lit: boolean }) {
+function Billboards({ g, lga, lit, city }: { g: Game; lga: string; lit: boolean; city: CityRender | null }) {
   const l = lgaById(lga);
   const st = g.states[l.state];
   const gov = g.people[st.leader];
@@ -627,10 +695,27 @@ function Billboards({ g, lga, lit }: { g: Game; lga: string; lit: boolean }) {
   const surname = gov ? gov.name.split(' ').slice(-1)[0].toUpperCase() : '';
   const best = g.businesses.filter((b) => b.owner === g.me && stageOf(b.type, b.level) >= 3).sort((a, b) => b.level - a.level)[0];
   const ad = best ? { head: best.name.toUpperCase(), sub: `Now in ${lgaById(best.lga).nick}. Come and see us!`, bg: '#1f1d1a', fg: '#f2b705' } : ADS[g.week % ADS.length];
+  const h = hood(lga);
+  // In the mapped districts the boards stand on the roofs of tall buildings near the bus stop.
+  const spots = h.real
+    ? city
+      ? billboardSpots(city, h, l.style === 'lagos-rich' ? 1.6 : 1)
+      : []
+    : [
+        { x: X0 + 10, z: -(MAIN_HALF + 7), y: 0, rot: 0 },
+        { x: X1 - 10, z: -(MAIN_HALF + 7), y: 0, rot: 0 },
+      ];
+  const boards = [
+    { head: st.leader === g.me ? 'YOUR GOVERNOR' : `GOV. ${surname}`, sub: `${party.id} · ${SLOGANS[st.style]}`, bg: party.color, fg: party.ink },
+    { head: ad.head, sub: ad.sub, bg: ad.bg, fg: ad.fg },
+  ];
   return (
     <group>
-      <Billboard x={X0 + 10} z={-(MAIN_HALF + 7)} head={st.leader === g.me ? 'YOUR GOVERNOR' : `GOV. ${surname}`} sub={`${party.id} · ${SLOGANS[st.style]}`} bg={party.color} fg={party.ink} lit={lit} />
-      <Billboard x={X1 - 10} z={-(MAIN_HALF + 7)} head={ad.head} sub={ad.sub} bg={ad.bg} fg={ad.fg} lit={lit} />
+      {spots.map((s, i) => (
+        <group key={i} position={[0, s.y, 0]}>
+          <Billboard x={s.x} z={s.z} rot={s.rot} {...boards[i]} lit={lit} />
+        </group>
+      ))}
     </group>
   );
 }
@@ -813,12 +898,14 @@ function Townsfolk({ g, lga, playerPos, onTalk }: { g: Game; lga: string; player
       if (n > 8) continue;
       const off = (n % 2 ? 1 : -1) * Math.ceil(n / 2) * 1.4 + 0.7;
       const [dx, dz] = plot.door;
-      // Spread out along the building's frontage, a step back from the kerb.
-      const along = plot.face === 'n' || plot.face === 's';
-      const back = plot.face === 's' ? -0.6 : plot.face === 'n' ? 0.6 : 0;
+      // Spread out along the building's frontage (its local x), a step back from the kerb towards it.
+      const ax = Math.cos(plot.rot);
+      const az = -Math.sin(plot.rot);
+      const bx = -Math.sin(plot.rot) * 0.6;
+      const bz = -Math.cos(plot.rot) * 0.6;
       // They come out of one of the houses.
       const house = h.plots[h.fillers[who.id % h.fillers.length]];
-      placed.push({ person: who, x: along ? dx + off : dx, z: along ? dz + back : dz + off, face: plot.rot, from: house.door });
+      placed.push({ person: who, x: dx + ax * off + bx, z: dz + az * off + bz, face: plot.rot, from: house.door });
       if (placed.length >= 30) break;
     }
     return placed;

@@ -8,10 +8,12 @@ import { hasPerk, naira, perksOf } from '../engine/life';
 import type { Game } from '../engine/types';
 import { Sparkline } from '../ui/charts';
 import { EconomyPanel, GovernmentPanel, LifePanel, MapPanel, NewsPanel, PeoplePanel } from '../ui/Panels';
+import { TravelApp } from './Travel';
 
-export type AppId = 'home' | 'alerts' | 'business' | 'prices' | 'gov' | 'contacts' | 'news' | 'map' | 'me';
+export type AppId = 'home' | 'travel' | 'alerts' | 'business' | 'prices' | 'gov' | 'contacts' | 'news' | 'map' | 'me';
 
 const APPS: { id: Exclude<AppId, 'home'>; name: string; icon: string; color: string }[] = [
+  { id: 'travel', name: 'Travel', icon: '🚌', color: '#c2552d' },
   { id: 'alerts', name: 'Bank', icon: '🏦', color: '#1e8f5a' },
   { id: 'business', name: 'Business', icon: '🏪', color: '#f2b705' },
   { id: 'prices', name: 'Prices', icon: '📈', color: '#2f63ad' },
@@ -28,9 +30,11 @@ interface Props {
   setApp: (a: AppId) => void;
   onClose: () => void;
   onWalk: (place: PlaceId) => void;
+  /** Take a trip from the travel app. */
+  onBook: (id: string) => void;
 }
 
-export function Phone({ g, app, setApp, onClose, onWalk }: Props) {
+export function Phone({ g, app, setApp, onClose, onWalk, onBook }: Props) {
   const current = APPS.find((a) => a.id === app);
   return (
     <div className="phone-overlay" onClick={onClose}>
@@ -71,6 +75,7 @@ export function Phone({ g, app, setApp, onClose, onWalk }: Props) {
               </div>
             </div>
           )}
+          {app === 'travel' && <TravelApp g={g} onWalk={onWalk} onBook={onBook} />}
           {app === 'alerts' && <Alerts g={g} />}
           {app === 'business' && <BusinessApp g={g} onWalk={onWalk} />}
           {app === 'prices' && <EconomyPanel g={g} />}

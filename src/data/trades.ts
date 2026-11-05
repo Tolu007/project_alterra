@@ -21,7 +21,9 @@ export type PlaceId =
   | 'bank'
   | 'govhouse'
   | 'palace'
-  | 'venue';
+  | 'venue'
+  | 'airport'
+  | 'jetty';
 
 export type Skill = 'edu' | 'tech' | 'biz' | 'people';
 
@@ -181,4 +183,6 @@ export const PLACES: Record<PlaceId, { name: string; blurb: string }> = {
   govhouse: { name: 'Government House', blurb: 'Where the governor sits.' },
   palace: { name: 'Palace', blurb: 'The traditional ruler’s court.' },
   venue: { name: 'Event centre', blurb: 'Premieres, concerts, comedy nights and owambe parties.' },
+  airport: { name: 'Airport', blurb: 'Domestic flights to Lagos, Kano and Port Harcourt. Check in an hour before.' },
+  jetty: { name: 'Ferry jetty', blurb: 'Ferries across the lagoon: no traffic, just life jackets and spray.' },
 };

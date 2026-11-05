@@ -4,9 +4,9 @@ import { ROLE_NAMES } from '../data/people';
 import { PLACES, tradeById, type PlaceId } from '../data/trades';
 import { lgaById, stateById } from '../data/world';
 import { businessOn, freeLots, isMobile, playerBusinesses, stageName, staffCap } from '../engine/business';
-import { clockLabel, dateLabel, dayPart, isRainySeason } from '../engine/calendar';
+import { clockLabel, dateLabel, dayPart, duration, isRainySeason } from '../engine/calendar';
 import { officeTitle } from '../engine/elections';
-import { HOURS, actionsAt, naira, placesIn, type DayAction } from '../engine/life';
+import { HOURS, actionsAt, naira, placesIn, rideHailActions, type DayAction } from '../engine/life';
 import { COLS, MAIN_Z, PAVEMENT, ROAD_X, ROAD_Z, ROWS, SIDE_HALF, halfWidth, hood, type Pt } from '../engine/map';
 import { advanceClock, doAction, goTo, hireTalent, payRide, peek, rideFare, routineWeek, talkTo } from '../engine/sim';
 import { DAYS_PER_WEEK, type Game } from '../engine/types';
@@ -14,19 +14,14 @@ import type { Intent } from '../engine/world';
 import { WeekReport } from '../ui/Modals';
 import { Portrait } from '../ui/Portrait';
 import { World, type Float, type Selection, type WalkTarget } from '../world/World';
+import { CityMinimap } from './CityMap';
 import { Phone, type AppId } from './Phone';
+import { TripOverlay, type TripShow } from './Travel';
 
 const ACTION_MS = 1500;
 /** Game minutes per real second at each speed: paused, normal, fast, fastest. */
 const SPEEDS = [0, 2, 6, 20];
 const SPEED_LABELS = ['Pause', 'Normal speed', 'Fast', 'Fastest'];
-
-/** "4h", "1h30", "45m". */
-export function duration(minutes: number): string {
-  const h = Math.floor(minutes / 60);
-  const m = Math.round(minutes % 60);
-  return h ? `${h}h${m ? String(m).padStart(2, '0') : ''}` : `${m}m`;
-}
 
 /** Online play: the server owns the world and its clock; the screen sends requests and shows the answers. */
 export interface Online {
@@ -62,6 +57,7 @@ export function Game3D({ g, setGame, onQuit, online }: Props) {
   const [fade, setFade] = useState<string | null>(null);
   const [places, setPlaces] = useState(false);
   const [ride, setRide] = useState(false);
+  const [trip, setTrip] = useState<TripShow | null>(null);
   const floatId = useRef(0);
   const track = useRef<Pt>([0, 0]);
   const timers = useRef<number[]>([]);
@@ -178,19 +174,26 @@ export function Game3D({ g, setGame, onQuit, online }: Props) {
     if (online) void online.send({ kind: 'goto', place, lot });
   };
 
-  const run = (a: DayAction) => {
+  /** Shows the route on the map while you travel: a few seconds here, the whole trip in the shared world. */
+  const showTrip = (a: DayAction, from: string) => {
+    if (!a.id.startsWith('travel:')) return;
+    setTrip({ id: a.id, from, t0: Date.now(), ms: online ? Math.max(4000, (a.minutes / online.rate) * 60_000) : 4200, minutes: a.minutes });
+  };
+
+  const run = (a: DayAction, where: Selection | null = menu) => {
     if (busy) return;
-    if (online && menu) {
+    if (online && where) {
       // The world decides; the answer comes back with the new state of things.
       setBusy(true);
       const before = g.player.money;
-      const where = menu;
+      const from = g.player.at;
       setMenu(null);
       void online.send({ kind: 'act', id: a.id, place: where.place, lot: where.lot }).then((r) => {
         setBusy(false);
         if (!r) return setToast({ text: 'Could not reach the game server. Try again.', ok: false });
         setToast({ text: r.text, ok: r.ok });
-        if (!r.ok) return setMenu(where);
+        if (!r.ok) return where === menu ? setMenu(where) : undefined;
+        showTrip(a, from);
         const dm = gRef.current.player.money - before;
         if (Math.abs(dm) >= 500) addFloats([{ text: `${dm > 0 ? '+' : '−'}${naira(Math.abs(dm))}`, tone: dm > 0 ? 'good' : 'bad' }]);
       });
@@ -201,6 +204,7 @@ export function Game3D({ g, setGame, onQuit, online }: Props) {
       setToast({ text: r.text, ok: false });
       return;
     }
+    showTrip(a, g.player.at);
     const next = r.game;
     const endsDay = next.day !== g.day || next.week !== g.week || next.phase !== 'day';
     const dm = next.player.money - g.player.money;
@@ -236,6 +240,15 @@ export function Game3D({ g, setGame, onQuit, online }: Props) {
         setMenu(a.id.startsWith('travel:') ? { place: next.place, lot: null } : menu);
       }
     });
+  };
+
+  /** A trip chosen on the phone: from where you stand, or a ride-hailing car from anywhere. */
+  const book = (id: string) => {
+    const a = actionsAt(g, g.place).find((x) => x.id === id) ?? rideHailActions(g).find((x) => x.id === id);
+    if (!a) return;
+    if (a.blocked) return setToast({ text: a.blocked, ok: false });
+    setPhone(null);
+    run(a, { place: g.place, lot: g.lot });
   };
 
   const chat = (id: number) => {
@@ -376,7 +389,8 @@ export function Game3D({ g, setGame, onQuit, online }: Props) {
         />
       )}
       {fade && <div className="night-fade">{fade}</div>}
-      {phone && <Phone g={g} app={phone} setApp={setPhone} onClose={() => setPhone(null)} onWalk={(p) => { setPhone(null); walk({ place: p }, ride); }} />}
+      {phone && <Phone g={g} app={phone} setApp={setPhone} onClose={() => setPhone(null)} onWalk={(p) => { setPhone(null); walk({ place: p }, ride); }} onBook={book} />}
+      {trip && <TripOverlay trip={trip} onClose={() => setTrip(null)} />}
       {isRainySeason(g.week) && <div className="weather-chip">🌧️ Rainy season</div>}
     </div>
   );
@@ -486,7 +500,12 @@ function ActionMenu({ g, sel, actions, onRun, onClose }: { g: Game; sel: Selecti
   const biz = sel.place === 'lot' && sel.lot !== null ? businessOn(g, g.player.at, sel.lot) : undefined;
   const farm = sel.place === 'lot' && sel.lot !== null && hood(g.player.at).plots[sel.lot]?.kind === 'farm';
   const title = sel.place === 'lot' ? (biz ? biz.name : farm ? 'Farmland for lease' : 'Plot for lease') : sel.place === 'home' ? 'Home' : PLACES[sel.place].name;
-  const sub = biz ? `${bizType(biz.type).name} · ${stageName(biz.type, biz.level).replace(/^an? /, '')} · level ${biz.level}` : sel.place === 'lot' ? 'Lease it and build. Shacks grow into big buildings as you expand.' : null;
+  // Real places in the mapped districts go by their real names.
+  const h = hood(g.player.at);
+  const realName = sel.place === 'busstop' ? h.real?.stopName : sel.place !== 'lot' && sel.place !== 'home' ? h.plots[h.place[sel.place] ?? -1]?.real : undefined;
+  const here = lgaById(g.player.at);
+  const named = realName ?? (sel.place === 'airport' ? here.airport : sel.place === 'jetty' ? here.jetty : undefined);
+  const sub = biz ? `${bizType(biz.type).name} · ${stageName(biz.type, biz.level).replace(/^an? /, '')} · level ${biz.level}` : sel.place === 'lot' ? 'Lease it and build. Shacks grow into big buildings as you expand.' : named ?? null;
   return (
     <div className="action-menu" role="dialog" aria-label={`${title} actions`}>
       <div className="am-head">
@@ -582,6 +601,7 @@ function Minimap({ g, track, selected, onWalk }: { g: Game; track: React.Mutable
   const minZ = h.farmland ? ROWS[0] - 40 : ROAD_Z[0];
   const view = `${ROAD_X[0]} ${minZ} ${ROAD_X[1] - ROAD_X[0]} ${ROAD_Z[1] - minZ}`;
   const placeOf = new Map<number, PlaceId>((Object.entries(h.place) as [PlaceId, number][]).map(([p, id]) => [id, p]));
+  if (open && h.real) return <CityMinimap g={g} track={track} selected={selected} onWalk={onWalk} onClose={() => setOpen(false)} />;
   if (!open) {
     return (
       <button className="minimap-toggle" onClick={() => setOpen(true)} title="Show the map">

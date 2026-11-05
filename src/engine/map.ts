@@ -1,9 +1,13 @@
+import city from '../data/city/lagos.json';
 import type { PlaceId } from '../data/trades';
 import { lgaById } from '../data/world';
 import { placesIn } from './life';
+import { onStreetNet, streetPoint, streetRoute } from './streets';
 
-// A small neighbourhood per LGA: a main road running east–west with side streets in a grid,
-// blocks of plots facing the roads, and farmland north of town where the LGA farms.
+// Where things are in each LGA. Lagos districts are built from real map data (scripts/build-city.mjs):
+// their real streets, with plots along them and the real market, motor park, jetty or airport where
+// they really are. Elsewhere, a small neighbourhood: a main road running east–west with side streets
+// in a grid, blocks of plots facing the roads, and farmland north of town where the LGA farms.
 // Pure data, shared by the rules (which plots exist) and the 3D world (where things are).
 
 /** Distance between parallel roads. */
@@ -35,6 +39,24 @@ export interface Plot {
   kind: 'street' | 'farm';
   /** Small side plots are always filler houses. */
   small?: boolean;
+  /** The real place this plot stands for, in districts built from map data. */
+  real?: string;
+  /** A famous building that is not a game place: its name and what kind of building it is. */
+  landmark?: { n: string; k: string };
+}
+
+/** A district built from real map data. */
+export interface RealHood {
+  name: string;
+  /** Map metres per game unit. */
+  scale: number;
+  /** The real bus stop's name and the road it is on. */
+  stopName: string;
+  street: string | null;
+  /** Width of the bus stop's road, kerb to kerb including pavements, and its centre beside the stop. */
+  span: number;
+  road: [number, number];
+  landmarks: number[];
 }
 
 export interface Hood {
@@ -45,9 +67,14 @@ export interface Hood {
   lots: number[];
   fillers: number[];
   busStop: [number, number];
+  /** Y rotation of the bus shelter. Its open side (local -z) faces the road. */
+  busRot: number;
+  /** Where you stand to catch a bus. */
+  busDoor: [number, number];
   bridgeX: number;
   bounds: { minX: number; maxX: number; minZ: number; maxZ: number };
   farmland: boolean;
+  real?: RealHood;
 }
 
 const ROT: Record<Facing, number> = { s: 0, n: Math.PI, e: Math.PI / 2, w: -Math.PI / 2 };
@@ -68,9 +95,58 @@ const OUTSKIRTS: PlaceId[] = ['oilsite', 'factory'];
 
 const memo = new Map<string, Hood>();
 
+interface CityDistrict {
+  name: string;
+  m: number;
+  bounds: Hood['bounds'];
+  plots: Plot[];
+  place: Record<string, number>;
+  lots: number[];
+  fillers: number[];
+  landmarks: number[];
+  busStop: { x: number; z: number; rot: number; door: [number, number]; road: [number, number]; name: string; street: string | null; span: number } | null;
+}
+const CITY = (city as unknown as { districts: Record<string, CityDistrict> }).districts;
+
+/** Is this LGA built from real map data? */
+export const isRealDistrict = (lga: string) => !!CITY[lga];
+
+/** A district from the real-map data. Places the LGA does not have become ordinary buildings. */
+function realHood(lga: string, c: CityDistrict): Hood {
+  const l = lgaById(lga);
+  const want: PlaceId[] = placesIn(lga).filter((p) => p !== 'busstop' && p !== 'lot');
+  const place: Partial<Record<PlaceId, number>> = {};
+  const spare = [...c.fillers];
+  for (const [p, id] of Object.entries(c.place) as [PlaceId, number][]) {
+    if (want.includes(p)) place[p] = id;
+    else spare.push(id);
+  }
+  // A place the data has no plot for borrows the filler nearest the bus stop.
+  for (const p of want) if (place[p] === undefined && spare.length) place[p] = spare.shift()!;
+  const stop = c.busStop ?? { x: 0, z: 0, rot: 0, door: [0, -1.4] as [number, number], road: [0, -4] as [number, number], name: l.nick, street: null, span: 15 };
+  return {
+    plots: c.plots,
+    place,
+    lots: c.lots,
+    fillers: spare.filter((id) => c.plots[id].kind === 'street'),
+    busStop: [stop.x, stop.z],
+    busRot: stop.rot,
+    busDoor: stop.door,
+    bridgeX: Number.NaN,
+    bounds: c.bounds,
+    farmland: !!l.farm || (l.mix.farmer ?? 0) > 0.05,
+    real: { name: c.name, scale: c.m, stopName: stop.name, street: stop.street, span: stop.span, road: stop.road, landmarks: c.landmarks },
+  };
+}
+
 export function hood(lga: string): Hood {
   const hit = memo.get(lga);
   if (hit) return hit;
+  if (CITY[lga]) {
+    const h = realHood(lga, CITY[lga]);
+    memo.set(lga, h);
+    return h;
+  }
   const l = lgaById(lga);
   const rnd = seeded(`hood:${lga}`);
   const plots: Plot[] = [];
@@ -160,6 +236,8 @@ export function hood(lga: string): Hood {
     lots,
     fillers,
     busStop: [COLS[1] + PITCH / 2 + 6, MAIN_HALF + PAVEMENT - 0.8],
+    busRot: 0,
+    busDoor: [COLS[1] + PITCH / 2 + 6, MAIN_HALF + PAVEMENT - 2.2],
     bridgeX: COLS[1] + PITCH / 2 - 8,
     bounds: { minX: COLS[0] - 30, maxX: COLS[3] + 30, minZ: ROWS[0] - (farmland ? 60 : 30), maxZ: ROWS[3] + 30 },
     farmland,
@@ -172,7 +250,7 @@ export function hood(lga: string): Hood {
 export function doorOf(lga: string, place: PlaceId, lot: number | null): [number, number] {
   const h = hood(lga);
   if (place === 'lot' && lot !== null) return h.plots[lot].door;
-  if (place === 'busstop') return [h.busStop[0], h.busStop[1] - 1.4];
+  if (place === 'busstop') return h.busDoor;
   const id = h.place[place];
   return id !== undefined ? h.plots[id].door : h.plots[h.place.home ?? 0].door;
 }
@@ -199,7 +277,13 @@ export function onStreet([x, z]: Pt): boolean {
 
 /** The nearest point you can walk to. */
 export function walkable(lga: string, p: Pt): Pt {
+  if (hood(lga).real) return streetPoint(lga, p);
   return onStreet(p) ? p : snap(p, hood(lga)).pt;
+}
+
+/** Is this point on a road or pavement in this LGA? Real districts need their streets loaded (registerStreets). */
+export function onStreetIn(lga: string, p: Pt): boolean {
+  return hood(lga).real ? onStreetNet(lga, p) : onStreet(p);
 }
 
 function snap(p: Pt, _h: Hood): { pt: Pt; axis: 'h' | 'v' } {
@@ -224,6 +308,7 @@ const len = (pts: Pt[]) => pts.slice(1).reduce((s, p, i) => s + Math.abs(p[0] - 
 /** A path that follows the street grid from one point to another. */
 export function route(lga: string, from: Pt, to: Pt): Pt[] {
   const h = hood(lga);
+  if (h.real) return streetRoute(lga, from, to);
   const a = snap(from, h);
   const b = snap(to, h);
   const sameLine = (a.axis === 'h' && b.axis === 'h' && a.pt[1] === b.pt[1]) || (a.axis === 'v' && b.axis === 'v' && a.pt[0] === b.pt[0]);

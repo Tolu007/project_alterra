@@ -23,6 +23,48 @@ function startPlot(lga: string, type: BizTypeId, taken: number[] = []): number {
   return ok[0] ?? h.lots[0];
 }
 
+/** The town layout plots refer to. 2: the Lagos districts rebuilt from real map data. */
+export const MAP_VERSION = 2;
+
+/**
+ * Keeps businesses on plots that exist. Worlds made before the towns were last redrawn move every
+ * business in a mapped district to the nearest free plot of the right kind, and send anyone standing
+ * on a plot home. Works on a world with or without a bound seat, so the server can run it on what it loads.
+ */
+export function migrateMap(g: Game): Game {
+  const stale = (g.mapVersion ?? 1) < MAP_VERSION;
+  const redrawn = (lga: string) => !!hood(lga).real;
+  // Every business in a mapped district must stand alone on a plot for lease of the right kind. Old
+  // worlds move them all; after that, only ones a rebuilt map has left on a plot that is gone.
+  const seen = new Set<string>();
+  const moving = g.businesses.filter((b) => {
+    if (b.plot < 0 || !redrawn(b.lga)) return false;
+    const h = hood(b.lga);
+    const key = `${b.lga}:${b.plot}`;
+    const bad = stale || !h.lots.includes(b.plot) || (h.plots[b.plot].kind === 'farm') !== needsFarmland(b.type) || seen.has(key);
+    seen.add(key);
+    return bad;
+  });
+  for (const b of moving) b.plot = -2;
+  for (const b of moving) {
+    const taken = g.businesses.filter((x) => x.lga === b.lga && x.plot >= 0).map((x) => x.plot);
+    b.plot = startPlot(b.lga, b.type, taken);
+  }
+  if (!stale) return g;
+  for (const seat of g.seats ?? []) {
+    if (seat.place === 'lot' && redrawn(seat.player.at)) {
+      seat.place = 'home';
+      seat.lot = null;
+    }
+  }
+  if (g.me >= 0 && g.player && g.place === 'lot' && redrawn(g.player.at)) {
+    g.place = 'home';
+    g.lot = null;
+  }
+  g.mapVersion = MAP_VERSION;
+  return g;
+}
+
 /** Saves from before businesses had plots: give each one the nearest free plot. */
 export function upgradeSave(g: Game): Game {
   // Saves from before seats: the one player becomes the world's only seat.
@@ -80,7 +122,7 @@ export function upgradeSave(g: Game): Game {
     const taken = g.businesses.filter((x) => x.lga === b.lga && typeof x.plot === 'number').map((x) => x.plot);
     b.plot = isMobile(b.type) ? -1 : startPlot(b.lga, b.type, taken);
   }
-  return g;
+  return migrateMap(g);
 }
 
 /** Everybody begins level: the same cash, skills and a rented room. */
@@ -159,6 +201,7 @@ function createWorld(seed: number, shared: Game['shared'], first?: NewLife): Gam
   const g = { rng: seed | 0, people: [] as Person[] } as unknown as Game;
   Object.assign(g, {
     version: 2,
+    mapVersion: MAP_VERSION,
     seed,
     rngs: { npc: { rng: (seed * 2654435761) | 0 }, culture: { rng: (seed * 2246822519 + 7) | 0 } },
     seats: [],

@@ -909,3 +909,167 @@
 .round-btn.paper-btn {
   background: var(--danfo-2);
 }
+
+/* While a mapped district's streets download. */
+.map-loading {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font: 700 18px/1.3 'Figtree', system-ui, sans-serif;
+  color: #1f1d1a;
+  background: rgba(233, 226, 212, 0.85);
+}
+
+/* The map of a district built from real map data: close up it follows you; opened out it shows it all. */
+.city-map {
+  width: 220px;
+}
+
+.city-map.whole {
+  top: 50%;
+  right: 50%;
+  transform: translate(50%, -50%);
+  width: min(86vw, 760px);
+  z-index: 9;
+}
+
+.city-map svg {
+  aspect-ratio: 260 / 198;
+}
+
+.city-map.whole svg {
+  aspect-ratio: auto;
+  max-height: 78vh;
+}
+
+.minimap-grow {
+  position: absolute;
+  top: -9px;
+  right: -9px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 2px solid var(--ink);
+  background: var(--paper);
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.mm-label {
+  font: 800 11px 'Figtree', system-ui, sans-serif;
+  fill: #1f1d1a;
+  stroke: #fffaf0;
+  stroke-width: 3px;
+  paint-order: stroke;
+  pointer-events: none;
+}
+
+.map-credit {
+  position: absolute;
+  bottom: 7px;
+  right: 9px;
+  font-size: 8.5px;
+  color: rgba(31, 29, 26, 0.7);
+  pointer-events: none;
+}
+
+/* The phone's travel app and the route shown while you travel. */
+.travel-app {
+  display: grid;
+  gap: 10px;
+}
+
+.travel-map {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 2px solid var(--ink);
+  border-radius: 12px;
+  background: #efe6d2;
+}
+
+.travel-label {
+  font-family: 'Figtree', system-ui, sans-serif;
+  font-weight: 800;
+  fill: var(--ink);
+  stroke: var(--paper);
+  stroke-width: 0.18em;
+  paint-order: stroke;
+  pointer-events: none;
+}
+
+.trip-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 8px;
+  align-items: center;
+  border: 2px solid var(--ink);
+  border-radius: 12px;
+  padding: 8px 10px;
+  background: #fff;
+}
+
+.trip-icon {
+  font-size: 22px;
+}
+
+.trip-where {
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.map-note {
+  margin: 0;
+  font-size: 10.5px;
+  color: var(--ink-3);
+}
+
+.trip-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 12;
+  display: grid;
+  place-items: center;
+  background: rgba(31, 29, 26, 0.35);
+  padding: 16px;
+}
+
+.trip-card {
+  width: min(560px, 100%);
+  background: var(--paper);
+  border: var(--b);
+  border-radius: 18px;
+  box-shadow: var(--shadow);
+  padding: 14px;
+  display: grid;
+  gap: 8px;
+}
+
+.trip-card .travel-map {
+  max-height: 58vh;
+}
+
+.trip-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+/* An invisible, larger tap target around a small map marker. */
+.hit-pad,
+.mm-hit:hover .hit-pad {
+  fill: transparent;
+  stroke: none;
+}
+
+.travel-map .mm-hit:hover {
+  stroke: none;
+}
+
+.travel-map .mm-hit:hover circle:not(.hit-pad),
+.travel-map path.mm-hit:hover {
+  fill: #f2b705;
+}
