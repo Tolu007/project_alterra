@@ -3,7 +3,7 @@ import { bind, packGame, publicSeats, seatOf, unbind, unpackGame } from '../src/
 import { migrateMap, startOptions, type NewLife } from '../src/engine/setup';
 import { chooseEvent, closeElection, continueEvent, continueReport, doAction, hireTalent, payRide, peek, submitGovern, talkTo, type GovernPlan } from '../src/engine/sim';
 import type { Game, Looks } from '../src/engine/types';
-import { AWAY_MS, DEFAULT_RATE, createSharedWorld, joinWorld, minutesDue, tickWorld, validPlace, type Intent } from '../src/engine/world';
+import { AWAY_MS, DEFAULT_RATE, comeBack, createSharedWorld, joinWorld, minutesDue, tickWorld, validPlace, type Intent } from '../src/engine/world';
 import type { Account, Store } from './store';
 
 // The one shared world. Every request brings it up to the present first; changes happen under a lock, and
@@ -88,7 +88,15 @@ const onlineCount = async (store: Store) => (await store.recentlySeen(Date.now()
 
 /** GET /api/world: your view, or just {same: true} if nothing changed since the version you have. */
 export async function worldView(store: Store, account: Account, since: number | null): Promise<string> {
-  const { g, version } = await current(store);
+  let { g, version } = await current(store);
+  // Back after being away: your character only sleeps while you are gone, so they wake now.
+  const mine = liveSeat(g, account);
+  if (mine !== null && seatOf(g, mine)?.asleep) {
+    ({ g, version } = await mutate(store, (w) => {
+      comeBack(w, mine, Date.now());
+      return { out: null };
+    }));
+  }
   const online = await onlineCount(store);
   if (since === version) return JSON.stringify({ same: true, version, serverNow: Date.now(), lag: minutesDue(g, Date.now()), online });
   return envelope(g, version, liveSeat(g, account), online);
@@ -130,7 +138,7 @@ export async function act(store: Store, account: Account, intent: Intent): Promi
   const { out, g, version } = await mutate(store, (g) => {
     const id = liveSeat(g, account);
     if (id === null) return { out: { ok: false, text: 'Create your character first.' } };
-    seatOf(g, id)!.seenMs = Date.now();
+    comeBack(g, id, Date.now());
     bind(g, id);
     return apply(g, intent);
   });

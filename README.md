@@ -48,11 +48,14 @@ a different stage.
 - **One world, one clock:** the server owns the world. Its clock runs in real time at
   `WORLD_RATE` game minutes per real minute: 12 by default, which makes a game hour five real
   minutes, a game day two hours and a game year about a month. Nobody can pause or speed it up.
-- **Actions take no real time:** a four-hour shift is done the moment you take it, as offline.
-  Your own clock jumps four hours ahead of the world's (the screen shows both), and your next
-  action starts where the last one ended, so opening hours and closing time still apply. When
-  your own clock reaches 2am your day is done: go to bed, and you sleep until the world reaches
-  morning. Asleep is the only time you wait.
+- **Actions are instant:** a shift, a meal or a trip is done the moment you take it, and nobody's
+  clock moves. Opening hours follow the world's clock. What pays, teaches or wins people over (a
+  shift at each business, odd jobs, a course, networking, family time, each campaign stop) can be
+  done once a world day; eating, shopping, travel and running your businesses are not limited.
+  Hunger and the rest wear down with the world's hours.
+- **No sleep while you play:** there is no bed online and you never pass out at 2am. You catch
+  your breath as the hours pass. Your character sleeps only while you are away, and wakes the
+  moment you come back.
 - **When you are away:** your character goes on without you. It reads the paper, answers
   events with the first sensible choice, eats, goes to work or to its business, and sleeps.
   Last week's paper waits for you when you come back.

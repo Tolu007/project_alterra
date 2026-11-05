@@ -9,8 +9,7 @@ import { officeTitle } from '../engine/elections';
 import { HOURS, actionsAt, naira, placesIn, rideHailActions, type DayAction } from '../engine/life';
 import { COLS, MAIN_Z, PAVEMENT, ROAD_X, ROAD_Z, ROWS, SIDE_HALF, halfWidth, hood, type Pt } from '../engine/map';
 import { advanceClock, doAction, goTo, hireTalent, payRide, peek, rideFare, routineWeek, talkTo } from '../engine/sim';
-import { ownMinute } from '../engine/seats';
-import { DAY_END, DAYS_PER_WEEK, type Game } from '../engine/types';
+import { DAYS_PER_WEEK, type Game } from '../engine/types';
 import type { Intent } from '../engine/world';
 import { WeekReport } from '../ui/Modals';
 import { Portrait } from '../ui/Portrait';
@@ -44,8 +43,6 @@ interface Props {
 /** The shared world's clock as this screen sees it: minutes after midnight, continuing past the last update. */
 const liveMinute = (g: Game, o: Online) => g.minute + o.lag + ((Date.now() - o.serverNow) / 60_000) * o.rate;
 const liveAbs = (g: Game, o: Online) => (g.week * DAYS_PER_WEEK + g.day) * 1440 + liveMinute(g, o);
-/** Online, your own clock: the world's, or later when your last action ran ahead of it. */
-const ownLive = (g: Game, o: Online) => Math.max(liveMinute(g, o), g.asleep ? 0 : g.busyUntil - (g.week * DAYS_PER_WEEK + g.day) * 1440);
 
 export function Game3D({ g, setGame, onQuit, online }: Props) {
   const [target, setTarget] = useState<WalkTarget | null>(null);
@@ -85,9 +82,8 @@ export function Game3D({ g, setGame, onQuit, online }: Props) {
     const t = window.setInterval(() => setTick((x) => x + 1), 1000);
     return () => window.clearInterval(t);
   }, [online]);
-  // Online you only ever wait while asleep; otherwise each action just moves your own clock on.
+  // Online nothing waits. Your character only sleeps while you are away, and wakes when you are back.
   const asleepUntil = online && g.asleep && g.busyUntil > liveAbs(g, online) ? g.busyUntil : null;
-  const dayDone = !!online && !asleepUntil && ownLive(g, online) >= DAY_END;
 
   useEffect(() => () => timers.current.forEach((t) => window.clearTimeout(t)), []);
   useEffect(() => {
@@ -105,9 +101,7 @@ export function Game3D({ g, setGame, onQuit, online }: Props) {
       const o = onlineRef.current;
       if (o) {
         // The server keeps time; between updates the clock runs on at the world's speed.
-        // Your own clock: the world's time, or ahead of it after an action, gliding forward when it jumps.
-        const want = ownLive(gg, o);
-        clock.current = want - clock.current > 2 ? clock.current + (want - clock.current) * Math.min(1, dt * 3) : want;
+        clock.current = liveMinute(gg, o);
       } else if (a) {
         // Fast-forward while an action plays out.
         const k = Math.min(1, (now - a.t0) / a.ms);
@@ -386,7 +380,6 @@ export function Game3D({ g, setGame, onQuit, online }: Props) {
           💤 Asleep until {clockLabel(asleepUntil)} · {Math.max(1, Math.round((asleepUntil - liveAbs(g, online)) / online.rate))} min
         </div>
       )}
-      {!busy && dayDone && <div className="busy-pill">🌙 Your day is done. Go home to bed; the world catches up while you sleep.</div>}
       {paperOpen && g.player.paper && (
         <WeekReport
           g={{ ...g, report: g.player.paper }}
@@ -447,7 +440,6 @@ function Clock({ g, clock, speed, setSpeed, onQuit, online }: { g: Game; clock: 
             ))}
           </div>
         )}
-        {online && minute - liveMinute(g, online) > 10 && <div className="kicker">World time {clockLabel(liveMinute(g, online))}</div>}
         <div className="kicker" style={{ marginTop: 3 }}>
           📍 {here.nick}, {stateById(here.state).name}
         </div>
@@ -522,7 +514,7 @@ function ActionMenu({ g, sel, actions, onRun, onClose }: { g: Game; sel: Selecti
           <div className="am-title">{title}</div>
           {sub && <div className="am-sub">{sub}</div>}
           <div className="kicker">
-            {clockLabel(ownMinute(g))} · {sel.place === 'home' || sel.place === 'clinic' ? 'Open all hours' : `Open ${clockLabel(open * 60)}–${clockLabel(close * 60)}`}
+            {clockLabel(g.minute)} · {sel.place === 'home' || sel.place === 'clinic' ? 'Open all hours' : `Open ${clockLabel(open * 60)}–${clockLabel(close * 60)}`}
           </div>
         </div>
         <button className="x-btn" onClick={onClose} aria-label="Close">

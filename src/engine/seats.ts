@@ -48,27 +48,6 @@ export function eachSeat(g: Game, fn: (s: Seat) => void) {
 /** Absolute game minutes since the world began. */
 export const absNow = (g: Game) => (g.week * DAYS_PER_WEEK + g.day) * 1440 + g.minute;
 
-/**
- * Your own time. In a shared world actions take no real time: each one moves your own clock on by its
- * length while the world's clock keeps its pace, so you run ahead of it until it catches up (or night
- * falls). Asleep, you are on the world's time. Offline there is only one clock.
- */
-export const ownAbs = (g: Game) => (g.shared && !g.asleep ? Math.max(absNow(g), g.busyUntil) : absNow(g));
-
-/** Your own time of day, in minutes after midnight on the world's date (past 24 hours for the small hours). */
-export const ownMinute = (g: Game) => g.minute + (ownAbs(g) - absNow(g));
-
-/** Runs fn with the game's clock set to your own time, then puts the world's clock back. */
-export function onOwnClock<T>(g: Game, fn: () => T): T {
-  const ahead = ownAbs(g) - absNow(g);
-  if (ahead <= 0) return fn();
-  g.minute += ahead;
-  try {
-    return fn();
-  } finally {
-    g.minute -= ahead;
-  }
-}
 
 /** For saving or sending: a copy with the bound seat written back and nothing left bound. */
 export function packGame(g: Game): string {

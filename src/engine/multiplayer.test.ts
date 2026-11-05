@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { actionsAt } from './life';
-import { absNow, bind, ownAbs, packGame, seatOf, unbind, unpackGame } from './seats';
+import { absNow, bind, packGame, seatOf, unbind, unpackGame } from './seats';
 import { holdElectionForTest } from './testHooks';
-import { createSharedWorld, joinWorld, tickWorld } from './world';
+import { comeBack, createSharedWorld, joinWorld, tickWorld } from './world';
 import { applyAction, peek } from './sim';
 import { avatarLooks } from './testLooks';
-import { DAY_END, type Game } from './types';
+import type { Game } from './types';
 
 const T0 = Date.UTC(2026, 10, 5, 8);
 const MIN = 60_000;
@@ -45,8 +45,9 @@ describe('a shared world', () => {
     expect(g.businesses.some((x) => x.owner === b)).toBe(false);
   });
 
-  it('actions take no real time: your own clock runs ahead of the world until it catches up', () => {
+  it('actions are instant: nobody waits and no clock moves; what pays can be done once a day', () => {
     const { g, a, b } = world();
+    g.minute = 9 * 60;
     bind(g, a);
     const biz = g.businesses.find((x) => x.owner === a)!;
     g.place = 'lot';
@@ -54,41 +55,47 @@ describe('a shared world', () => {
     const before = absNow(g);
     const money = g.player.money;
     applyAction(g, `bw:${biz.id}`);
-    // The world's clock did not move, yours did: four hours on.
     expect(absNow(g)).toBe(before);
-    expect(ownAbs(g)).toBe(before + 240);
+    expect(g.busyUntil).toBeLessThanOrEqual(before);
     expect(g.player.money).toBeGreaterThan(money);
-    // No waiting: the next thing starts where the shift ended.
+    // Straight on to the next thing.
     g.place = 'market';
     g.lot = null;
-    const eat = actionsAt(peek(g, 'market'), 'market').find((x) => x.id === 'eat')!;
-    expect(eat.blocked).toBeFalsy();
+    expect(actionsAt(peek(g, 'market'), 'market').find((x) => x.id === 'eat')?.blocked).toBeFalsy();
     applyAction(g, 'eat');
-    expect(ownAbs(g)).toBe(before + 240 + eat.minutes);
-    // The other player is on the world's time.
+    applyAction(g, 'eat');
+    expect(absNow(g)).toBe(before);
+    // The same shift again waits for tomorrow.
+    expect(actionsAt(peek(g, 'lot', biz.plot), 'lot').find((x) => x.id === `bw:${biz.id}`)?.blocked).toMatch(/Done for today/);
+    // The other player is free to do it.
     bind(g, b);
-    expect(ownAbs(g)).toBe(absNow(g));
     expect(actionsAt(peek(g, 'home'), 'home').some((x) => !x.blocked)).toBe(true);
-    // Once the world catches up, your clock is the world's again.
-    online(g, a, T0 + 30 * MIN);
-    online(g, b, T0 + 30 * MIN);
-    tickWorld(g, T0 + 30 * MIN);
-    bind(g, a);
-    expect(ownAbs(g)).toBe(absNow(g));
   });
 
-  it('your day ends at 2am on your own clock: then only bed, and you sleep until the world reaches morning', () => {
-    const { g, a } = world();
+  it('online you never sleep: no bed, no passing out at 2am; away, you sleep, and wake when you come back', () => {
+    const { g, a, b } = world();
     bind(g, a);
-    // A long day of running ahead: your clock is past 2am while the world's is still in the morning.
-    g.busyUntil = absNow(g) - g.minute + DAY_END + 5;
-    expect(actionsAt(peek(g, 'market'), 'market').every((x) => x.blocked?.startsWith('Your day is done'))).toBe(true);
-    g.place = 'home';
-    expect(actionsAt(peek(g, 'home'), 'home').find((x) => x.id === 'sleep')?.blocked).toBeFalsy();
-    applyAction(g, 'sleep');
+    const home = actionsAt(peek(g, 'home'), 'home').map((x) => x.id);
+    expect(home).not.toContain('sleep');
+    expect(home).not.toContain('nap');
+    unbind(g);
+    // Ada plays on through the night; Tunde has gone away. Twenty-two game hours pass.
+    for (let m = 10; m <= 110; m += 10) {
+      online(g, a, T0 + m * MIN);
+      tickWorld(g, T0 + m * MIN);
+    }
+    expect(g.day).toBe(1);
+    bind(g, a);
+    expect(g.asleep).toBe(false);
+    expect(g.player.energy).toBeGreaterThan(30);
+    bind(g, b);
     expect(g.asleep).toBe(true);
-    expect(g.busyUntil).toBeGreaterThan(absNow(g) - g.minute + DAY_END);
-    expect(actionsAt(peek(g, 'home'), 'home').every((x) => x.blocked?.startsWith('Asleep'))).toBe(true);
+    unbind(g);
+    // Tunde comes back: awake at once.
+    comeBack(g, b, T0 + 111 * MIN);
+    bind(g, b);
+    expect(g.asleep).toBe(false);
+    expect(actionsAt(peek(g, 'home'), 'home').some((x) => x.id === 'cook' && !x.blocked)).toBe(true);
   });
 
   it('players who are away live on autopilot: they work, eat, sleep and get paid', () => {

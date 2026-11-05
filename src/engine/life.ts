@@ -8,12 +8,12 @@ import { govById, levelOf } from './government';
 import { BIZ, WAGES, bizType, type BizType, type BizTypeId } from '../data/businesses';
 import { businessOn, businessValue, fire, growCost, hire, isMobile, needsFarmland, openBlocked, openBusiness, openCost, playerBusinesses, sellBusiness, settleDay, stageName, staffCap, starterShift, wageWeekly, weeklyPnL } from './business';
 import { hood } from './map';
-import { absNow, humanOf, isHuman, ownAbs } from './seats';
+import { absNow, humanOf, isHuman } from './seats';
 import { attend, eventsHere, isOn } from './culture';
 import { buyout, buyoutPrice, rivalsNote } from './npc';
 import { between, chance, pick } from './rng';
 import { MODES, parseTrip, tripDetail, tripLabel, tripsFrom } from './travel';
-import { DAY_END, WEEKS_PER_YEAR, type Business, type Game, type Housing, type Player } from './types';
+import { WEEKS_PER_YEAR, type Business, type Game, type Housing, type Player } from './types';
 
 export const HOUSING: Record<Housing, { name: string; rent: number; energy: number }> = {
   family: { name: 'Family house', rent: 0, energy: 0.4 },
@@ -199,23 +199,23 @@ function needsFor(g: Game, trade: TradeId): string | null {
 
 const atHome = (g: Game) => g.player.at === g.player.home;
 
-/** A read-only view of the game at your own time, for working out what you can do. */
-const ownView = (g: Game): Game => {
-  const ahead = ownAbs(g) - absNow(g);
-  return ahead > 0 ? { ...g, minute: g.minute + ahead } : g;
-};
+/**
+ * In the shared world actions are instant, so the ones that pay, teach or win people over can each be
+ * done once a world day (per business, course or campaign stop). Eating, shopping, travel and running
+ * your businesses are not limited.
+ */
+export const onceADay = (id: string) => ['work', 'oddjobs', 'network', 'family', 'football', 'petition', 'protest', 'palace', 'clinic', 'delegates'].includes(id) || /^(bw|learn|campaign|apply):/.test(id);
 
-/** Why nothing can be done right now in a shared world (asleep, or your day is used up), or null. */
-function occupiedNote(g: Game, id: string): string | null {
+/** In a shared world: asleep (which only happens while you are away), or this was already done today. */
+function sharedBlock(g: Game, id: string): string | null {
   if (!g.shared) return null;
   if (g.asleep && g.busyUntil > absNow(g)) return `Asleep until ${clockLabel(g.busyUntil)}.`;
-  if (g.minute >= DAY_END && id !== 'sleep') return 'Your day is done. Go home to bed: by the time you wake, the world will have caught up.';
+  if (onceADay(id) && g.flags[`did:${id}`] === g.week * 7 + g.day) return 'Done for today. Come back tomorrow.';
   return null;
 }
 
-/** Everything the player can do at a place today, at your own time. */
-export function actionsAt(g0: Game, place: PlaceId): DayAction[] {
-  const g = ownView(g0);
+/** Everything the player can do at a place today. */
+export function actionsAt(g: Game, place: PlaceId): DayAction[] {
   const p = g.player;
   const t = tradeById(p.trade);
   const here = lgaById(p.at);
@@ -262,9 +262,10 @@ export function actionsAt(g0: Game, place: PlaceId): DayAction[] {
       out.push(...travelActions(g, 'airport'));
       break;
     case 'home':
-      out.push({ id: 'sleep', label: g.minute >= 24 * 60 ? 'Go to bed (it is late)' : 'Go to bed', detail: g.minute < 22 * 60 ? 'Sleep through to 6am. An early night means a full recharge.' : g.minute < 24 * 60 ? 'Up at 6am.' : 'Six hours of sleep; you will wake up late.', energy: 0, minutes: 0, tone: 'rest' });
+      // In the shared world you never go to bed: your character sleeps while you are away.
+      if (!g.shared) out.push({ id: 'sleep', label: g.minute >= 24 * 60 ? 'Go to bed (it is late)' : 'Go to bed', detail: g.minute < 22 * 60 ? 'Sleep through to 6am. An early night means a full recharge.' : g.minute < 24 * 60 ? 'Up at 6am.' : 'Six hours of sleep; you will wake up late.', energy: 0, minutes: 0, tone: 'rest' });
       out.push({ id: 'cook', label: 'Cook and eat at home', detail: 'Rice and stew from the pot. Hunger +45.', cost: Math.round(1_500 * foodIdx(g)), energy: 0, tone: 'food' });
-      out.push({ id: 'nap', label: 'Take a nap', detail: 'An hour and a half on the mat. Energy +20.', energy: 20, tone: 'rest' });
+      if (!g.shared) out.push({ id: 'nap', label: 'Take a nap', detail: 'An hour and a half on the mat. Energy +20.', energy: 20, tone: 'rest' });
       out.push({ id: 'family', label: 'Time with family', detail: 'Social and mood up; your people feel remembered.', cost: Math.round(3_000 * P(g)), energy: 5, tone: 'rest' });
       break;
     case 'market':
@@ -360,8 +361,8 @@ export function actionsAt(g0: Game, place: PlaceId): DayAction[] {
   const open = isOpen(g, place);
   const closesIn = HOURS[place][1] * 60 - g.minute;
   return out.map((a) => {
-    // In a shared world you can always act next, except asleep or once your day is used up.
-    const occupied = occupiedNote(g, a.id);
+    // In a shared world you can always act at once, except on what you already did today.
+    const occupied = sharedBlock(g, a.id);
     let minutes = a.minutes ?? durationOf(a.id);
     // Shifts end when the place closes.
     if (isShift(a.id)) minutes = Math.max(0, Math.min(minutes, closesIn));
@@ -547,9 +548,8 @@ function travelActions(g: Game, place: PlaceId): Draft[] {
 }
 
 /** Ride-hailing cars, booked on the phone from wherever you are. */
-export function rideHailActions(g0: Game): DayAction[] {
-  const g = ownView(g0);
-  const occupied = occupiedNote(g, 'taxi');
+export function rideHailActions(g: Game): DayAction[] {
+  const occupied = sharedBlock(g, 'taxi');
   return tripsFrom(g)
     .filter((t) => t.mode === 'taxi')
     .map((t) => ({ id: t.id, label: tripLabel(t), detail: tripDetail(t), cost: t.cost, energy: t.energy, minutes: t.minutes, tone: 'rest' as const, blocked: occupied ?? t.blocked ?? (g.player.money < t.cost ? 'Not enough money.' : null) }));
@@ -647,16 +647,16 @@ export function act(g: Game, id: string): string {
   p.energy = clamp(p.energy + a.energy, 0, 100);
   const here = p.at;
 
-  // The clock moves while you do it.
+  // The clock moves while you do it (offline; in the shared world actions are instant).
   const minutes = a.minutes;
   const working = isShift(id);
   const crowd = working && (g.place === 'market' || g.place === 'park' || g.place === 'lot');
   const startedAt = g.minute;
   const activity = working ? 'work' : id === 'nap' || id === 'family' ? 'rest' : 'idle';
   if (g.shared) {
-    // In a shared world the clock belongs to everyone: you are busy until it is done.
-    drift(g, minutes, activity, crowd || id === 'network' || id.startsWith('attend:'));
-    g.busyUntil = absNow(g) + minutes;
+    // The clock belongs to everyone and nobody waits: the action is done at once. Needs wear down with
+    // the world's hours instead.
+    if (onceADay(id)) g.flags[`did:${id}`] = today;
   } else passTime(g, minutes, activity, crowd || id === 'network' || id.startsWith('attend:'));
 
   if (id === 'work') {

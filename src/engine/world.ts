@@ -56,33 +56,42 @@ export function tickWorld(g: Game, nowMs: number): number {
   return passed;
 }
 
+/** Energy back per game hour while you are online: you never sleep then, so you catch your breath as you go. */
+const ONLINE_REST = 2.5;
+
 function stepWorld(g: Game, minutes: number, awayBefore: number) {
   g.minute += minutes;
   const now = absNow(g);
   eachSeat(g, (s) => {
     if (g.ending) return;
-    if (g.busyUntil > now) return;
     if (g.asleep) {
+      if (g.busyUntil > now) return;
       g.asleep = false;
       return;
     }
-    drift(g, minutes, 'idle');
-    if (s.seenMs < awayBefore) autopilot(g);
+    if (s.seenMs >= awayBefore) {
+      drift(g, minutes, 'rest');
+      g.player.energy = clamp(g.player.energy + (minutes / 60) * ONLINE_REST, 0, 100);
+    } else {
+      drift(g, minutes, 'idle');
+      autopilot(g);
+    }
   });
-  if (g.minute >= DAY_END) endDayShared(g);
+  if (g.minute >= DAY_END) endDayShared(g, awayBefore);
 }
 
 /**
  * 2am for everyone: the day's takings are booked, tonight's shows are reviewed, anyone still up passes out
  * (and wakes at 9), and the calendar turns. After Saturday, Sunday's settlement runs for the whole world.
  */
-function endDayShared(g: Game) {
+function endDayShared(g: Game, awayBefore: number) {
   bookBusinessDay(g);
   resolveCulture(g);
   const nineAm = absNow(g) - g.minute + 1440 + 9 * 60;
-  eachSeat(g, () => {
+  eachSeat(g, (s) => {
     g.talked = [];
-    if (g.asleep || g.ending) return;
+    // Players who are here play on through the night; only characters left alone pass out.
+    if (g.asleep || g.ending || s.seenMs >= awayBefore) return;
     const p = g.player;
     p.energy = clamp(p.energy + 7 * 4, 0, 100);
     p.hunger = clamp(p.hunger - 7 * 1.2, 0, 100);
@@ -118,7 +127,7 @@ function autopilot(g: Game) {
   };
   if (h >= 22 || h < DAY_START / 60) {
     at('home');
-    applyAction(g, 'sleep');
+    goToBed(g);
     return;
   }
   if (p.at !== p.home) {
@@ -129,8 +138,7 @@ function autopilot(g: Game) {
   if (p.hunger < 45 && tryDo('home', 'cook')) return;
   const job = mainWork(g);
   const today = g.week * 7 + g.day;
-  if (job && g.flags.workDay !== today && h < 15 && tryDo(job.place, job.id, job.lot ?? null)) return;
-  if (p.energy < 20) tryDo('home', 'nap');
+  if (job && g.flags.workDay !== today && h < 15) tryDo(job.place, job.id, job.lot ?? null);
 }
 
 /** A new player joins a shared world. Returns their person id. */
@@ -140,14 +148,25 @@ export function joinWorld(g: Game, life: NewLife, account: string, nowMs: number
   const id = addSeat(g, life, account);
   const s = seatOf(g, id)!;
   s.seenMs = nowMs;
-  // Arriving at night, you sleep first.
-  if (g.minute < DAY_START || g.minute >= 23 * 60) {
-    bind(g, id);
-    goToBed(g);
-    unbind(g);
-  }
   if (was >= 0 && seatOf(g, was)) bind(g, was);
   return id;
+}
+
+/** You are back: the world sees you, and if your character fell asleep while you were away, they wake up. */
+export function comeBack(g: Game, id: number, nowMs: number) {
+  const s = seatOf(g, id);
+  if (!s) return;
+  s.seenMs = Math.max(s.seenMs, nowMs);
+  const bound = g.me === id;
+  if (bound ? g.asleep : s.asleep) {
+    if (bound) {
+      g.asleep = false;
+      g.busyUntil = 0;
+    } else {
+      s.asleep = false;
+      s.busyUntil = 0;
+    }
+  }
 }
 
 /** Things a player can ask the world to do, checked against the rules on the server. */
