@@ -298,7 +298,7 @@ export function TripOverlay({ trip, onClose }: { trip: TripShow; onClose: () => 
   const b = lgaById(p.to);
   const progress = Math.min(1, (now - trip.t0) / trip.ms);
   const inLagos = a.state === 'LA' && b.state === 'LA';
-  const road = p.mode === 'danfo' || p.mode === 'brt' || p.mode === 'taxi' ? (o?.routes[pairKey(a.id, b.id)]?.via ?? []) : [];
+  const road = p.mode === 'danfo' || p.mode === 'brt' || p.mode === 'taxi' || p.mode === 'trek' ? (o?.routes[pairKey(a.id, b.id)]?.via ?? []) : [];
   const title = `${MODES[p.mode].icon} ${MODES[p.mode].name} to ${a.state === b.state ? b.nick : stateById(b.state).name}`;
   // What the signs over the road say on the way: the roads you take, or the towns you pass.
   const signs = road.length ? road.slice(0, 4) : p.mode === 'bus' ? (interstate(a.state, b.state)?.towns ?? []) : [];
@@ -321,7 +321,7 @@ export function TripOverlay({ trip, onClose }: { trip: TripShow; onClose: () => 
                 : `Leaving ${a.nick}…`}
           </span>
           <button className="btn btn-small" onClick={onClose}>
-            {progress < 1 ? 'Skip the ride' : p.mode === 'flight' ? 'Get off' : 'Get down'}
+            {progress < 1 ? (p.mode === 'trek' ? 'Skip the walk' : 'Skip the ride') : p.mode === 'flight' ? 'Get off' : p.mode === 'trek' ? 'Made it' : 'Get down'}
           </button>
         </div>
       </div>

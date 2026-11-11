@@ -1128,7 +1128,9 @@ for (const [id, d] of Object.entries(DISTRICTS)) {
   console.log(`   bus stop: ${stats.busStop}`);
 }
 if (existsSync('data/osm/lagos-overview.json')) {
-  const ov = buildOverview(hubs);
+  // The travel map and its routes are Lagos only; the other cities' districts just have streets.
+  const LAGOS = new Set(['OSH', 'IKJ', 'LIS', 'LMA', 'ETI', 'APP', 'IKD']);
+  const ov = buildOverview(Object.fromEntries(Object.entries(hubs).filter(([id]) => LAGOS.has(id.slice(0, 3)))));
   writeFileSync(`${OUT}/overview.json`, JSON.stringify(ov));
   engineOut.travel = {
     road: Object.fromEntries(Object.entries(ov.routes).map(([k, r]) => [k, { km: r.km, via: r.via }])),

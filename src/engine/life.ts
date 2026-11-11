@@ -222,7 +222,6 @@ export function actionsAt(g: Game, place: PlaceId): DayAction[] {
   const here = lgaById(p.at);
   const out: Draft[] = [];
   const tired = p.energy < 12 ? 'Too tired. Rest first.' : null;
-  const fare = tripCost(g);
   const away = !atHome(g);
 
   if (place === t.place && t.kind === 'salary') {
@@ -378,8 +377,7 @@ export function actionsAt(g: Game, place: PlaceId): DayAction[] {
         a.blocked ??
         (!open ? closedNote(place) : null) ??
         short ??
-        (a.cost && p.money < a.cost ? 'Not enough money.' : null) ??
-        (a.energy < 0 && place !== 'home' && fare > p.money ? 'Not even transport money.' : null),
+        (a.cost && p.money < a.cost ? 'Not enough money.' : null),
     };
   });
 }
@@ -644,8 +642,12 @@ export function act(g: Game, id: string): string {
   const today = g.week * 7 + g.day;
   const staffBus = id === 'work' && hasPerk(g, 'transport');
   if (g.place !== 'home' && !id.startsWith('travel:') && !(t.levy === 'park' && id === 'work') && !staffBus && g.flags.tripDay !== today) {
-    ledger(g, 'Transport', -tripCost(g));
-    g.flags.tripDay = today;
+    // With no money for the fare you go on foot: nothing to pay, but it wears you out. Being broke
+    // never stops you working your way back.
+    if (p.money >= tripCost(g)) {
+      ledger(g, 'Transport', -tripCost(g));
+      g.flags.tripDay = today;
+    } else p.energy = clamp(p.energy - 4, 0, 100);
   }
   p.energy = clamp(p.energy + a.energy, 0, 100);
   const here = p.at;

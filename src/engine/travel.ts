@@ -9,7 +9,7 @@ import { LGAS, lgaById, lgasOf, stateById, type StateId } from '../data/world';
 import { clockLabel } from './calendar';
 import type { Game } from './types';
 
-export type Mode = 'danfo' | 'brt' | 'rail' | 'ferry' | 'taxi' | 'bus' | 'flight';
+export type Mode = 'danfo' | 'brt' | 'rail' | 'ferry' | 'taxi' | 'bus' | 'flight' | 'trek';
 
 /** Where each way of travelling leaves from (null: booked on the phone, wherever you are) and arrives. */
 export const MODES: Record<Mode, { name: string; icon: string; board: PlaceId | null; arrive: PlaceId }> = {
@@ -20,6 +20,8 @@ export const MODES: Record<Mode, { name: string; icon: string; board: PlaceId | 
   taxi: { name: 'Ride-hailing car', icon: '🚕', board: null, arrive: 'busstop' },
   bus: { name: 'Interstate bus', icon: '🚍', board: 'park', arrive: 'park' },
   flight: { name: 'Flight', icon: '✈️', board: 'airport', arrive: 'airport' },
+  // On foot, when there is no money for the fare: nobody is ever stranded.
+  trek: { name: 'Trek', icon: '🚶', board: 'busstop', arrive: 'busstop' },
 };
 
 export interface Trip {
@@ -100,12 +102,18 @@ export function tripsFrom(g: Game, from = g.player.at): Trip[] {
   for (const l of lgasOf(here.state)) {
     if (l.id === from) continue;
     const road = TABLE ? lagosRoad(from, l.id) : null;
+    // No money for the fare? You can always trek: free, slow, and it takes it out of you.
+    const trek = (km: number, cost: number, via: string[]) => {
+      if (g.player.money < cost) add({ mode: 'trek', to: l.id, km, minutes: (km / 4.5) * 60, cost: 0, energy: -Math.round(Math.min(55, 8 + km * 2.2)), via, blocked: null });
+    };
     if (!road) {
       // Outside the mapped city: the old flat fare and an hour and a quarter on the road.
       add({ mode: 'danfo', to: l.id, km: 0, minutes: 75, cost: Math.round(fare * 2), energy: -6, via: [], blocked: null, plain: true });
+      trek(9, Math.round(fare * 2), []);
       continue;
     }
     const km = road.km;
+    trek(km, Math.round(fare * (0.8 + km / 7)), road.via);
     add({ mode: 'danfo', to: l.id, km, minutes: 12 + (km / (24 / rush)) * 60, cost: Math.round(fare * (0.8 + km / 7)), energy: -Math.round(4 + km / 6), via: road.via, blocked: null, plain: true });
     if (onLine(TABLE?.brt, from, l.id)) {
       add({ mode: 'brt', to: l.id, km, minutes: 10 + (km / (30 / (1 + (rush - 1) * 0.35))) * 60, cost: Math.round(fare * (0.7 + km / 12)), energy: -Math.round(3 + km / 10), via: road.via, blocked: hours(5.5 * 60, 22 * 60, 'BRT buses') });
@@ -184,6 +192,8 @@ export function tripLabel(t: Trip): string {
       return `Bus to ${stateById(l.state).name}`;
     case 'flight':
       return `Fly to ${stateById(l.state).name}`;
+    case 'trek':
+      return `Trek to ${l.nick} (no fare)`;
   }
 }
 
@@ -204,6 +214,8 @@ export function tripDetail(t: Trip): string {
       return `${t.km} km via ${roads}, door to door with AC. The price surges with the traffic.`;
     case 'bus':
       return `${t.km.toLocaleString()} km to ${stateById(l.state).capital} via ${t.via.slice(0, 3).join(', ')}. Arrives at the motor park.`;
+    case 'trek':
+      return `${t.km} km on foot${t.via.length ? ` along ${t.via.slice(0, 2).join(' and ')}` : ''}. No money for the bus, so leg-edes Benz it is. Tiring.`;
     case 'flight':
       return `To ${t.via[0]}. Check in an hour before; about ${Math.round((t.minutes - AIRPORT_MINUTES) / 5) * 5} minutes in the air.`;
   }

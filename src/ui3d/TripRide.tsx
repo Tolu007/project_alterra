@@ -2,7 +2,7 @@ import { Canvas, useFrame } from '@react-three/fiber';
 import { useMemo, useRef, type ReactNode } from 'react';
 import * as THREE from 'three';
 import type { Mode } from '../engine/travel';
-import { Brt, Car, Danfo, Keke, Truck, mat } from '../world/Actors';
+import { Brt, Car, Danfo, Keke, Person3D, Truck, mat } from '../world/Actors';
 import { signTexture } from '../world/textures';
 
 // The view from the road while you travel: your danfo (or BRT, taxi, coach, train, ferry or plane) on its
@@ -376,9 +376,9 @@ function Scene({ mode, via, progress, hour, rush }: RideProps) {
   const light = useMemo(() => daylight(hour), [hour]);
   const dist = useRef(0);
   const body = useRef<THREE.Group>(null);
-  const road = mode === 'danfo' || mode === 'brt' || mode === 'taxi' || mode === 'bus';
+  const road = mode === 'danfo' || mode === 'brt' || mode === 'taxi' || mode === 'bus' || mode === 'trek';
   // Go-slow: the worse the traffic, the slower the street goes by. BRT lanes and rails skip most of it.
-  const speed = mode === 'flight' ? 60 : mode === 'rail' ? 34 : mode === 'ferry' ? 16 : (mode === 'brt' ? 26 : 30) / Math.max(1, mode === 'brt' ? 1 + (rush - 1) * 0.3 : rush);
+  const speed = mode === 'trek' ? 5 : mode === 'flight' ? 60 : mode === 'rail' ? 34 : mode === 'ferry' ? 16 : (mode === 'brt' ? 26 : 30) / Math.max(1, mode === 'brt' ? 1 + (rush - 1) * 0.3 : rush);
   const total = speed * 9;
   // Which road you are on now decides whether you are on a bridge over the lagoon.
   const at = via.length ? via[Math.min(via.length - 1, Math.floor(progress * via.length))] : '';
@@ -391,12 +391,17 @@ function Scene({ mode, via, progress, hour, rush }: RideProps) {
       body.current.position.y = mode === 'ferry' ? Math.sin(t * 1.6) * 0.12 : mode === 'flight' ? Math.sin(t * 0.7) * 0.4 : Math.abs(Math.sin(t * 9)) * 0.035;
       body.current.rotation.x = mode === 'ferry' ? Math.sin(t * 1.1) * 0.03 : mode === 'flight' ? Math.sin(t * 0.5) * 0.05 : 0;
     }
-    const far = mode === 'flight' ? 1.7 : mode === 'rail' ? 1.5 : 1;
+    const far = mode === 'flight' ? 1.7 : mode === 'rail' ? 1.5 : mode === 'trek' ? 0.62 : 1;
     camera.position.set(-13 * far, 5.6 * far + Math.sin(t * 0.5) * 0.15, 8.5 * far);
-    camera.lookAt(5, 1.4, -1);
+    camera.lookAt(5, 1.4, mode === 'trek' ? 8 : -1);
   });
   const vehicle =
-    mode === 'danfo' ? <Danfo /> : mode === 'brt' || mode === 'bus' ? <Brt /> : mode === 'taxi' ? <Car color="#1f1d1a" /> : mode === 'rail' ? <Train /> : mode === 'ferry' ? <Ferry /> : <Plane />;
+    mode === 'trek' ? (
+      // On foot along the kerb, facing the way you are going.
+      <group rotation={[0, Math.PI / 2, 0]}>
+        <Person3D looks={{ skin: 2, hair: 1, outfit: 2, accent: 3, glasses: false }} gender="m" pose="walk" speed={1} />
+      </group>
+    ) : mode === 'danfo' ? <Danfo /> : mode === 'brt' || mode === 'bus' ? <Brt /> : mode === 'taxi' ? <Car color="#1f1d1a" /> : mode === 'rail' ? <Train /> : mode === 'ferry' ? <Ferry /> : <Plane />;
   return (
     <>
       <color attach="background" args={[light.sky]} />
@@ -404,16 +409,16 @@ function Scene({ mode, via, progress, hour, rush }: RideProps) {
       <hemisphereLight args={['#ffffff', '#8a8577', light.ambient]} />
       <directionalLight position={[-30, 60, 40]} intensity={light.sun} color="#fff4dc" />
       {road ? <RoadWorld key={bridge ? 'b' : 'r'} dist={dist} bridge={bridge} night={light.night} /> : mode === 'rail' ? <RoadWorld dist={dist} bridge={false} night={light.night} /> : <OpenWorld dist={dist} sky={mode === 'flight'} />}
-      {road && <Others dist={dist} speed={speed} lanes={mode === 'brt' ? [6.8, 9.6] : [0.4, 9.6]} lit={light.night} />}
+      {road && <Others dist={dist} speed={mode === 'trek' ? 24 : speed} lanes={mode === 'brt' ? [6.8, 9.6] : mode === 'trek' ? [0.4, 3.8, 7.2] : [0.4, 9.6]} lit={light.night} />}
       {mode === 'rail' && (
         <mesh position={[60, 0.3, 4.2]} material={mat('#857c70')}>
           <boxGeometry args={[420, 0.5, 5]} />
         </mesh>
       )}
       {road && via.map((name, i) => <RoadSign key={name} text={name} x={((i + 0.35) / via.length) * total + 30} dist={dist} />)}
-      <group ref={body} position={[0, mode === 'rail' ? 0.5 : mode === 'flight' ? 2 : 0, mode === 'brt' ? 3.4 : mode === 'rail' ? 4.2 : 4.4]}>
+      <group ref={body} position={[0, mode === 'rail' ? 0.5 : mode === 'flight' ? 2 : 0, mode === 'brt' ? 3.4 : mode === 'rail' ? 4.2 : mode === 'trek' ? 10.9 : 4.4]}>
         {vehicle}
-        {light.night && mode !== 'flight' && mode !== 'ferry' && <Beams len={mode === 'danfo' ? 4.1 : mode === 'taxi' ? 3.8 : mode === 'rail' ? 27.6 : 8.5} />}
+        {light.night && mode !== 'flight' && mode !== 'ferry' && mode !== 'trek' && <Beams len={mode === 'danfo' ? 4.1 : mode === 'taxi' ? 3.8 : mode === 'rail' ? 27.6 : 8.5} />}
       </group>
     </>
   );

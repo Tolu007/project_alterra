@@ -50,6 +50,18 @@ export function migrateMap(g: Game): Game {
     const taken = g.businesses.filter((x) => x.lga === b.lga && x.plot >= 0).map((x) => x.plot);
     b.plot = startPlot(b.lga, b.type, taken);
   }
+  // Anyone standing on a plot a rebuilt map no longer has goes home (a town that has just been given its real streets).
+  const gone = (lga: string, lot: number | null) => lot === null || !hood(lga).lots.includes(lot);
+  for (const seat of g.seats ?? []) {
+    if (seat.place === 'lot' && gone(seat.player.at, seat.lot)) {
+      seat.place = 'home';
+      seat.lot = null;
+    }
+  }
+  if (g.me >= 0 && g.player && g.place === 'lot' && gone(g.player.at, g.lot)) {
+    g.place = 'home';
+    g.lot = null;
+  }
   if (!stale) return g;
   for (const seat of g.seats ?? []) {
     if (seat.place === 'lot' && redrawn(seat.player.at)) {

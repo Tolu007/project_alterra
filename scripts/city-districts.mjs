@@ -10,6 +10,18 @@ export const DISTRICTS = {
   ETI: { name: 'Lekki & VI', m: 5.5, box: [6.418, 3.41, 6.456, 3.47] },
   APP: { name: 'Apapa', m: 4.2, box: [6.43, 3.332, 6.458, 3.376] },
   IKD: { name: 'Ikorodu', m: 4.2, box: [6.598, 3.485, 6.633, 3.521] },
+  // Kano: the old walled city, Sabon Gari, the GRA and Bompai, Dala, and the farm town of Kura.
+  KMC: { name: 'Kano City', m: 4, box: [11.981, 8.502, 12.009, 8.532] },
+  FAG: { name: 'Sabon Gari', m: 4, box: [11.998, 8.52, 12.028, 8.552] },
+  NAS: { name: 'GRA & Bompai', m: 4.4, box: [11.975, 8.535, 12.005, 8.568] },
+  DAL: { name: 'Dala', m: 4, box: [12.0, 8.485, 12.03, 8.517] },
+  KUR: { name: 'Kura', m: 3.6, box: [11.76, 8.415, 11.787, 8.445] },
+  // Rivers: Port Harcourt around Mile 1 and the GRA, Rumuokoro, Eleme, Bonny town and Okrika.
+  PHC: { name: 'Mile 1 & GRA', m: 4.2, box: [4.772, 6.985, 4.802, 7.018] },
+  OBI: { name: 'Rumuokoro', m: 4.2, box: [4.852, 6.98, 4.883, 7.013] },
+  ELE: { name: 'Eleme', m: 4, box: [4.778, 7.105, 4.808, 7.138] },
+  BON: { name: 'Bonny Island', m: 3.6, box: [4.42, 7.152, 4.448, 7.182] },
+  OKR: { name: 'Okrika', m: 3.6, box: [4.726, 7.068, 4.754, 7.1] },
 };
 
 /** Lagos as a whole, for the travel map and the routes between districts. */
@@ -82,6 +94,38 @@ export const REAL_PLACES = {
     school: ['Ikorodu High School', 'Ikorodu Senior Grammar'],
     busstop: ['Ikorodu Roundabout', 'Garage'],
   },
+  KMC: {
+    market: ['Kurmi', 'Kantin Kwari', 'Market'],
+    palace: ['Emir.*Palace', 'Gidan Rumfa', 'Palace'],
+    park: ['Motor Park', 'Park'],
+    clinic: ['Murtala Muhammad Specialist Hospital', 'Hospital'],
+    school: ['Rumfa College', 'School'],
+  },
+  FAG: {
+    market: ['Sabon Gari Market', 'Singer', 'Market'],
+    park: ['Motor Park', 'Park'],
+    airport: ['Mallam Aminu Kano'],
+    clinic: ['Hospital'],
+  },
+  NAS: {
+    govhouse: ['Government House'],
+    clinic: ['Aminu Kano Teaching Hospital', 'Hospital'],
+    factory: ['Bompai'],
+    market: ['Market'],
+  },
+  DAL: { market: ['Market'], clinic: ['Hospital'], school: ['School'] },
+  KUR: { market: ['Market'], school: ['School'], clinic: ['Hospital'] },
+  PHC: {
+    market: ['Mile (1|One) Market', 'Mile (1|One)', 'Market'],
+    park: ['Motor Park', 'Park'],
+    govhouse: ['Government House'],
+    clinic: ['Braithwaite', 'Hospital'],
+    venue: ['Civic Centre', 'Stadium'],
+  },
+  OBI: { market: ['Rumuokoro Market', 'Market'], park: ['Motor Park', 'Park'], clinic: ['Hospital'], school: ['School'] },
+  ELE: { factory: ['Refinery', 'Indorama', 'Petrochemical'], market: ['Market'], clinic: ['Hospital'] },
+  BON: { jetty: ['Jetty', 'Terminal'], oilsite: ['NLNG', 'LNG'], market: ['Market'], clinic: ['Hospital'] },
+  OKR: { jetty: ['Jetty'], oilsite: ['Refinery'], market: ['Market'], clinic: ['Hospital'] },
 };
 
 /** Real lines between the districts: the BRT corridors, the Red Line train, and the jetties ferries call at. */
