@@ -131,3 +131,44 @@ describe('analytics', () => {
     expect(s.json.days).toHaveLength(14);
   });
 });
+
+describe('players with each other, over the API', () => {
+  it('chat and money go from one player to the other, and nobody sees the rest', async () => {
+    const a = client();
+    const b = client();
+    await a('/auth/signup', { name: 'Chidi Obi', email: 'chidi@example.com', password: 'abcd1234' });
+    await b('/auth/signup', { name: 'Bola Ige', email: 'bola@example.com', password: 'abcd1234' });
+    const ja = await a('/world/join', { gender: 'm', looks, home: 'IKJ', start: { kind: 'business', type: 'stall' } });
+    const jb = await b('/world/join', { gender: 'f', looks, home: 'IKJ', start: { kind: 'business', type: 'pos' } });
+    expect(ja.status).toBe(200);
+    expect(jb.status).toBe(200);
+    const idA = ja.json.game.me as number;
+    const idB = jb.json.game.me as number;
+    const before = jb.json.game.player.money as number;
+
+    const said = await a('/world/act', { intent: { kind: 'chat', text: 'Good morning Ikeja!' } });
+    expect(said.json.result.ok).toBe(true);
+    const whisper = await a('/world/act', { intent: { kind: 'chat', text: 'Bola, are you there?', to: idB } });
+    expect(whisper.json.result.ok).toBe(true);
+    const paid = await a('/world/act', { intent: { kind: 'pay', to: idB, amount: 5000 } });
+    expect(paid.json.result).toMatchObject({ ok: true });
+    expect((await a('/world/act', { intent: { kind: 'pay', to: idB, amount: 999_999_999 } })).json.result.ok).toBe(false);
+
+    const view = (await b('/world')).json.game;
+    expect(view.player.money).toBe(before + 5000);
+    const texts = view.social.chat.map((m: { text: string }) => m.text);
+    expect(texts).toContain('Good morning Ikeja!');
+    expect(texts).toContain('Bola, are you there?');
+    expect(view.social.board.map((r: { id: number }) => r.id).sort()).toEqual(expect.arrayContaining([idA, idB]));
+    // Other players' private state never leaves the server.
+    expect(view.seats).toEqual([]);
+
+    // A third player elsewhere sees neither the Ikeja street nor the private message.
+    const c = client();
+    await c('/auth/signup', { name: 'Musa Kabir', email: 'musa@example.com', password: 'abcd1234' });
+    const jc = await c('/world/join', { gender: 'm', looks, home: 'OSH', start: { kind: 'job', trade: 'factory' } });
+    const seen = jc.json.game.social.chat.map((m: { text: string }) => m.text);
+    expect(seen).not.toContain('Good morning Ikeja!');
+    expect(seen).not.toContain('Bola, are you there?');
+  });
+});

@@ -114,6 +114,42 @@ where function storage is temporary.
   or take a keke (an okada where it is not banned) for a small fare and no time. The minimap
   follows you through the streets; open it out to see the whole district and tap a place to go
   there. Buildings between you and the camera sink out of the way.
+- **Finding your way:** when you set off, a line of blue dots on the ground shows the way and a
+  beam of light marks the place; a chip at the bottom says where you are going and how far is
+  left, with a button to stop. The map shows the same route. Open the map out for street names
+  and a key, and tap a place, or anywhere on a street, to go there. A keke or okada takes the
+  traffic lane, the right way down one-way streets, not the pavement.
+- **Traffic in Lagos:** vehicles drive on the district's real road network (`src/engine/traffic.ts`).
+  They keep to a lane on the right, follow each side of a dual carriageway the right way, queue,
+  give way at junctions, turn from road to road, and stop for you when you cross. Danfos pull in
+  at the bus stop. Roads are full at rush hour and nearly empty at night.
+- **Getting started:** a new life begins with a short list under the clock (go somewhere, earn
+  some money, eat, greet a neighbour, open the big map, check your phone), ticked off as you do
+  each one. Skip hides it for good.
+- **Sound:** the street is made in the browser with the Web Audio API (`src/ui3d/sound.ts`); there
+  are no sound files. A city hum that follows the traffic, horns, generators and crickets at
+  night, birds at dawn, rain in the rainy season, and small sounds for money in and out, arriving
+  and chatting. It starts with your first tap; the button under the clock turns it off.
+- **Street life:** hawkers with trays on their heads work the kerbs and the lines between lanes
+  near the bus stop, and a traffic warden stands at the nearest big junction. In the rainy season
+  people carry umbrellas and puddles lie along the kerbs.
+- **The ride:** when you travel you watch the trip: your danfo, BRT, taxi, coach, train, ferry or
+  plane on its way, the roads you pass named on signs overhead, slower in the go-slow, with the
+  route map underneath. "Skip the ride" ends it early.
+- **The wider world:** now and then something happens abroad or up-country (`src/engine/shocks.ts`):
+  a war in the Middle East, OPEC cuts, a global recession, pipeline attacks, grain and shipping
+  crises, floods, an oil boom, a bumper harvest. Each pushes on crude, oil output, import costs
+  or food; the rest follows through the economy's own links (crude → petrol and diesel → fares,
+  generators and food; under a subsidy the pump price holds and the subsidy bill grows). A chip
+  on screen says what is going on. In development, `__nh.shock('mideast-war')` starts one.
+- **Other players (online):** the People button opens street chat for the district you are in,
+  private messages, deals and a leaderboard (`src/engine/social.ts`). You can send money, lend
+  with an agreed repayment, buy or sell a business, employ another player on a weekly wage, and
+  endorse another player's campaign. The server sends each player only their own part.
+- **Family life:** ask a neighbour out once you get on, propose, marry, have children, and
+  furnish your home (`src/engine/family.ts`). A spouse adds to the household's income; children
+  cost money and lift your mood; furniture lifts mood and health each week. You age a year
+  every 48 weeks.
 - **Getting around Lagos:** from the bus stop, danfos go to every other district along the real
   roads (Ikorodu to Lagos Island is 33 km via Ikorodu Road and Third Mainland Bridge), and rush
   hour makes them crawl. The BRT runs where its corridors do (Ikorodu–Yaba–Lagos Island,

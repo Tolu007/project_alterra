@@ -16,7 +16,7 @@ import type { Game, Person } from '../engine/types';
 import { Brt, Canoe, Car, Danfo, Keke, Mover, Okada, Person3D, Truck, Walker, mat, type Pose } from './Actors';
 import { BizBuilding } from './BizBuildings';
 import { Building, earthen } from './Buildings';
-import { CityPedestrians, CityScene, CityStopDanfo, CityTraffic, LANDMARK_HEIGHT, LandmarkModel, PlaceModel, billboardSpots } from './City';
+import { CityPedestrians, CityScene, CityStreetLife, CityTraffic, LANDMARK_HEIGHT, LandmarkModel, PlaceModel, billboardSpots, trafficAt } from './City';
 import { useCity, type CityRender } from './cityData';
 import { labelTexture, nameTexture } from './textures';
 import { Billboard, BusStop, Filler, FootBridge, NightLights, StreetLights, Streets, Tree, VacantLot, WALLS, fillerKinds, seeded } from './Town';
@@ -27,6 +27,8 @@ export interface WalkTarget {
   point?: [number, number];
   /** Take a keke (or okada) instead of walking. */
   ride?: boolean;
+  /** Stop where you are. */
+  stop?: boolean;
   nonce: number;
 }
 
@@ -54,6 +56,8 @@ interface WorldProps {
   onTalk: (person: number) => void;
   /** Written every frame with where you are, for the minimap. */
   track?: React.MutableRefObject<Pt>;
+  /** Written every frame with the way still to go (empty when you are standing still), for the minimap and the HUD. */
+  trail?: React.MutableRefObject<Pt[]>;
 }
 
 const X0 = ROAD_X[0];
@@ -61,16 +65,21 @@ const X1 = ROAD_X[1];
 
 /** Sky, sun and ambient light for a time of day. */
 function lightFor(t: number, rainy: boolean) {
-  const day = Math.max(0, Math.sin(((t - 0.22) / 0.56) * Math.PI));
+  // The sun climbs quickly after dawn, so mornings are bright rather than murky.
+  const day = Math.pow(Math.max(0, Math.sin(((t - 0.22) / 0.56) * Math.PI)), 0.6);
   const dusk = Math.max(0, 1 - Math.abs(t - 0.74) / 0.06) + Math.max(0, 1 - Math.abs(t - 0.26) / 0.05);
   const night = new THREE.Color('#111832');
-  const noon = new THREE.Color(rainy ? '#a7b3bc' : '#8fcfe8');
+  const noon = new THREE.Color(rainy ? '#a7b3bc' : '#a9dcf0');
   const sunset = new THREE.Color('#f0a167');
   const sky = night.clone().lerp(noon, Math.min(1, day * 1.4)).lerp(sunset, Math.min(0.7, dusk * 0.7) * (rainy ? 0.3 : 1));
+  // Overhead the sky is deeper than at the horizon.
+  const zenith = new THREE.Color('#060a1c').lerp(new THREE.Color(rainy ? '#7f8f9c' : '#3f8fd6'), Math.min(1, day * 1.4)).lerp(new THREE.Color('#6a5a8c'), Math.min(0.5, dusk * 0.5) * (rainy ? 0.3 : 1));
   return {
     sky,
+    zenith,
+    stars: Math.max(0, 1 - day * 5),
     sun: (rainy ? 1.4 : 3) * day,
-    ambient: 0.75 + 1.05 * day,
+    ambient: 0.8 + 1.0 * day,
     angle: (t - 0.25) * Math.PI * 2,
     night: day < 0.12,
     /** Warm sun near dawn and dusk, white at noon. */
@@ -107,7 +116,7 @@ export function World(props: WorldProps) {
   );
 }
 
-function Scene({ g, clock, busy, target, selected, floats, onWalk, onArrive, onTalk, track }: WorldProps) {
+function Scene({ g, clock, busy, target, selected, floats, onWalk, onArrive, onTalk, track, trail }: WorldProps) {
   const lga = lgaById(g.player.at);
   const style = lga.style;
   const h = hood(lga.id);
@@ -148,6 +157,12 @@ function Scene({ g, clock, busy, target, selected, floats, onWalk, onArrive, onT
   useEffect(() => {
     if (!target || !mapReady) return;
     let to: Pt;
+    if (target.stop) {
+      path.current = [];
+      dest.current = null;
+      setRiding(false);
+      return;
+    }
     if (target.place) {
       to = doorOf(lga.id, target.place, target.lot ?? null);
       dest.current = { place: target.place, lot: target.lot ?? null };
@@ -155,7 +170,7 @@ function Scene({ g, clock, busy, target, selected, floats, onWalk, onArrive, onT
       to = walkable(lga.id, target.point);
       dest.current = null;
     } else return;
-    path.current = route(lga.id, [pos.current.x, pos.current.z], to).slice(1);
+    path.current = route(lga.id, [pos.current.x, pos.current.z], to, !!target.ride).slice(1);
     setRiding(!!target.ride);
     // Already standing there: open its menu straight away.
     const d = dest.current;
@@ -203,6 +218,7 @@ function Scene({ g, clock, busy, target, selected, floats, onWalk, onArrive, onT
     else if (!busy && !next && pose.current !== 'idle') setPose('idle');
     p.position.copy(pos.current);
     if (track) track.current = [pos.current.x, pos.current.z];
+    if (trail) trail.current = path.current;
   });
 
   const walkTo = (e: ThreeEvent<MouseEvent>) => {
@@ -229,7 +245,7 @@ function Scene({ g, clock, busy, target, selected, floats, onWalk, onArrive, onT
       <FollowCamera target={pos} />
 
       {h.real ? (
-        city && <CityScene city={city} h={h} style={style} tar={g.lgaInfra[lga.id].roads >= 45} lightsOn={lightsOn} playerPos={pos} onClick={walkTo as never} />
+        city && <CityScene city={city} h={h} style={style} tar={g.lgaInfra[lga.id].roads >= 45} lightsOn={lightsOn} night={night} playerPos={pos} onClick={walkTo as never} />
       ) : (
         <>
           <Streets lga={lga.id} style={style} roads={g.lgaInfra[lga.id].roads} onClick={walkTo as never} />
@@ -325,16 +341,16 @@ function Scene({ g, clock, busy, target, selected, floats, onWalk, onArrive, onT
       {h.real ? (
         city && (
           <>
-            <CityTraffic city={city} lagos={lga.state === 'LA'} kekeColor={kekeColor} okada={okada} playerPos={pos} />
-            <CityStopDanfo h={h} lagos={lga.state === 'LA'} kekeColor={kekeColor} />
-            <CityPedestrians city={city} h={h} playerPos={pos} />
+            <CityTraffic city={city} h={h} lagos={lga.state === 'LA'} kekeColor={kekeColor} okada={okada} playerPos={pos} busy={trafficAt(hour)} lightsOn={night} />
+            <CityPedestrians city={city} h={h} playerPos={pos} rainy={rainy} />
+            <CityStreetLife city={city} h={h} playerPos={pos} rainy={rainy} />
           </>
         )
       ) : (
         <>
           <Traffic g={g} style={style} lga={lga.id} kekeColor={kekeColor} okada={okada} />
           <StoppingDanfo lga={lga.id} lagos={lga.state === 'LA'} kekeColor={kekeColor} />
-          <Pedestrians seed={lga.id} count={22} />
+          <Pedestrians seed={lga.id} count={22} rainy={rainy} />
         </>
       )}
       <Townsfolk g={g} lga={lga.id} playerPos={pos} onTalk={onTalk} />
@@ -358,8 +374,9 @@ function Scene({ g, clock, busy, target, selected, floats, onWalk, onArrive, onT
           </Html>
         ))}
       </group>
+      <RouteGuide path={path} pos={pos} />
       {ringAt && !busy && <SelectRing x={ringAt[0]} z={ringAt[1]} />}
-      {pointAt && <TargetRing x={pointAt[0]} z={pointAt[1]} />}
+      {pointAt && !target?.stop && <TargetRing x={pointAt[0]} z={pointAt[1]} />}
     </>
   );
 }
@@ -468,9 +485,34 @@ function PlaceLabel({ x, z, y, text, playerPos, selected }: { x: number; z: numb
   );
 }
 
+/** The sky: the horizon's colour low down (so the haze melts into it), deepening overhead. */
+const SKY = new THREE.ShaderMaterial({
+  side: THREE.BackSide,
+  depthWrite: false,
+  fog: false,
+  uniforms: { uLow: { value: new THREE.Color('#a9dcf0') }, uHigh: { value: new THREE.Color('#3f8fd6') } },
+  vertexShader: 'varying float vUp; void main() { vUp = normalize(position).y; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+  fragmentShader: 'uniform vec3 uLow; uniform vec3 uHigh; varying float vUp; void main() { gl_FragColor = vec4(mix(uLow, uHigh, smoothstep(0.02, 0.75, vUp)), 1.0); }',
+});
+
 /** Eases sky, sun and ambient light towards the requested time of day, every frame. The sun's shadow box follows you. */
 function DayLight({ clock, rainy, playerPos, ground }: { clock: React.MutableRefObject<number>; rainy: boolean; playerPos: React.MutableRefObject<THREE.Vector3>; ground: string }) {
-  const { scene } = useThree();
+  const { scene, camera } = useThree();
+  const dome = useRef<THREE.Group>(null);
+  const stars = useRef<THREE.Points>(null);
+  const starGeo = useMemo(() => {
+    const arr = new Float32Array(500 * 3);
+    for (let i = 0; i < 500; i++) {
+      // Scattered over the upper sky.
+      const a = Math.random() * Math.PI * 2;
+      const up = 0.12 + Math.random() * 0.88;
+      const r = Math.sqrt(1 - up * up);
+      arr.set([Math.cos(a) * r * 560, up * 560, Math.sin(a) * r * 560], i * 3);
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(arr, 3));
+    return geo;
+  }, []);
   const hemi = useRef<THREE.HemisphereLight>(null);
   const sun = useRef<THREE.DirectionalLight>(null);
   const moon = useRef<THREE.DirectionalLight>(null);
@@ -495,6 +537,12 @@ function DayLight({ clock, rainy, playerPos, ground }: { clock: React.MutableRef
     const l = lightFor(shown.current, rainy);
     scene.background = l.sky;
     if (scene.fog instanceof THREE.Fog) scene.fog.color.copy(l.sky);
+    if (dome.current) {
+      dome.current.position.copy(camera.position);
+      SKY.uniforms.uLow.value.copy(l.sky);
+      SKY.uniforms.uHigh.value.copy(l.zenith);
+    }
+    if (stars.current) (stars.current.material as THREE.PointsMaterial).opacity = l.stars * (rainy ? 0.3 : 0.9);
     if (hemi.current) {
       // Light from the sky is mostly white; only a hint of the sky's colour, so materials keep their saturation.
       hemi.current.color.set('#ffffff').lerp(l.sky, 0.25);
@@ -514,6 +562,14 @@ function DayLight({ clock, rainy, playerPos, ground }: { clock: React.MutableRef
   });
   return (
     <>
+      <group ref={dome}>
+        <mesh material={SKY} renderOrder={-10} frustumCulled={false}>
+          <sphereGeometry args={[580, 24, 12]} />
+        </mesh>
+        <points ref={stars} geometry={starGeo} renderOrder={-9} frustumCulled={false}>
+          <pointsMaterial color="#ffffff" size={1.6} sizeAttenuation={false} transparent opacity={0} depthWrite={false} fog={false} />
+        </points>
+      </group>
       <hemisphereLight ref={hemi} args={['#8fcfe8', ground, 0.8]} />
       <directionalLight ref={sun} castShadow shadow-mapSize={[2048, 2048]} shadow-camera-left={-55} shadow-camera-right={55} shadow-camera-top={55} shadow-camera-bottom={-55} shadow-camera-far={300} shadow-bias={-0.0005} />
       <directionalLight ref={moon} position={[-40, 60, -20]} intensity={0} color="#8ea6ff" />
@@ -791,7 +847,7 @@ function StoppingDanfo({ lga, lagos, kekeColor }: { lga: string; lagos: boolean;
   return <group ref={ref}>{lagos ? <Danfo /> : <Keke color={kekeColor} />}</group>;
 }
 
-function Pedestrians({ seed, count }: { seed: string; count: number }) {
+function Pedestrians({ seed, count, rainy }: { seed: string; count: number; rainy: boolean }) {
   const people = useMemo(() => {
     const rnd = seeded(`ped:${seed}`);
     return Array.from({ length: count }, () => {
@@ -807,6 +863,7 @@ function Pedestrians({ seed, count }: { seed: string; count: number }) {
         to: ew ? X1 : ROAD_Z[1],
         speed: 1.1 + rnd() * 0.9,
         offset: rnd() * 300,
+        brolly: rnd() < 0.7 ? ['#1f1d1a', '#2f63ad', '#b8352a', '#1e8f5a', '#f2b705'][Math.floor(rnd() * 5)] : null,
       };
     });
   }, [seed, count]);
@@ -814,7 +871,7 @@ function Pedestrians({ seed, count }: { seed: string; count: number }) {
     <group>
       {people.map((p, i) => (
         <group key={i} position={[0, 0.16, 0]}>
-          <Walker looks={p.looks} gender={p.gender} axis={p.axis} z={p.line} from={p.from} to={p.to} speed={p.speed} offset={p.offset} />
+          <Walker looks={p.looks} gender={p.gender} axis={p.axis} z={p.line} from={p.from} to={p.to} speed={p.speed} offset={p.offset} umbrella={rainy ? p.brolly : null} />
         </group>
       ))}
     </group>
@@ -1025,6 +1082,95 @@ function Rain({ playerPos }: { playerPos: React.MutableRefObject<THREE.Vector3> 
       </bufferGeometry>
       <pointsMaterial color="#a9c6d6" size={0.12} transparent opacity={0.7} />
     </points>
+  );
+}
+
+const ROUTE_DOT = new THREE.CircleGeometry(0.34, 14);
+ROUTE_DOT.rotateX(-Math.PI / 2);
+const ROUTE_RIM = new THREE.CircleGeometry(0.5, 14);
+ROUTE_RIM.rotateX(-Math.PI / 2);
+const ROUTE_MAX = 110;
+const ROUTE_GAP = 2.3;
+
+/**
+ * The way to where you are going: a line of dots along the streets, flowing towards it, and a beam of light
+ * over the place itself so you can see it from far off.
+ */
+function RouteGuide({ path, pos }: { path: React.MutableRefObject<Pt[]>; pos: React.MutableRefObject<THREE.Vector3> }) {
+  const dots = useRef<THREE.InstancedMesh>(null);
+  const rims = useRef<THREE.InstancedMesh>(null);
+  const beacon = useRef<THREE.Group>(null);
+  const gem = useRef<THREE.Mesh>(null);
+  const o = useMemo(() => new THREE.Object3D(), []);
+  useFrame(({ clock }) => {
+    const m = dots.current;
+    const r = rims.current;
+    if (!m || !r) return;
+    const pts = path.current;
+    let n = 0;
+    let carry = ROUTE_GAP - ((clock.elapsedTime * 2.6) % ROUTE_GAP);
+    let ax = pos.current.x;
+    let az = pos.current.z;
+    let gone = 0;
+    for (const q of pts) {
+      const L = Math.hypot(q[0] - ax, q[1] - az);
+      let s = carry;
+      for (; s < L && n < ROUTE_MAX; s += ROUTE_GAP) {
+        // The first dots grow from under your feet.
+        const k = Math.min(1, (gone + s) / 3.5);
+        if (k < 0.25) continue;
+        o.position.set(ax + ((q[0] - ax) * s) / L, 0.13, az + ((q[1] - az) * s) / L);
+        o.scale.setScalar(k);
+        o.updateMatrix();
+        r.setMatrixAt(n, o.matrix);
+        o.position.y = 0.15;
+        o.updateMatrix();
+        m.setMatrixAt(n++, o.matrix);
+      }
+      carry = s - L;
+      gone += L;
+      ax = q[0];
+      az = q[1];
+      if (n >= ROUTE_MAX) break;
+    }
+    m.count = n;
+    r.count = n;
+    m.instanceMatrix.needsUpdate = true;
+    r.instanceMatrix.needsUpdate = true;
+    const b = beacon.current;
+    if (b) {
+      const end = pts[pts.length - 1];
+      b.visible = !!end && Math.hypot(end[0] - pos.current.x, end[1] - pos.current.z) > 5;
+      if (end) b.position.set(end[0], 0, end[1]);
+      if (gem.current) {
+        gem.current.position.y = 4.2 + Math.sin(clock.elapsedTime * 3) * 0.35;
+        gem.current.rotation.y = clock.elapsedTime * 1.6;
+      }
+    }
+  });
+  return (
+    <group>
+      <instancedMesh ref={rims} args={[ROUTE_RIM, undefined, ROUTE_MAX]} frustumCulled={false}>
+        <meshBasicMaterial color="#ffffff" />
+      </instancedMesh>
+      <instancedMesh ref={dots} args={[ROUTE_DOT, undefined, ROUTE_MAX]} frustumCulled={false}>
+        <meshBasicMaterial color="#2a6df4" />
+      </instancedMesh>
+      <group ref={beacon} visible={false}>
+        <mesh position={[0, 11, 0]} renderOrder={5}>
+          <cylinderGeometry args={[0.28, 0.5, 22, 10, 1, true]} />
+          <meshBasicMaterial color="#5b9bff" transparent opacity={0.3} depthTest={false} depthWrite={false} side={THREE.DoubleSide} />
+        </mesh>
+        <mesh ref={gem} position={[0, 4.2, 0]} scale={[1, 1.5, 1]} renderOrder={6}>
+          <octahedronGeometry args={[0.75, 0]} />
+          <meshBasicMaterial color="#2a6df4" depthTest={false} />
+        </mesh>
+        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.16, 0]}>
+          <ringGeometry args={[0.95, 1.3, 28]} />
+          <meshBasicMaterial color="#2a6df4" />
+        </mesh>
+      </group>
+    </group>
   );
 }
 

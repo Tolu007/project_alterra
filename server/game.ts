@@ -1,7 +1,8 @@
 import { LGAS } from '../src/data/world';
 import { bind, packGame, publicSeats, seatOf, unbind, unpackGame } from '../src/engine/seats';
 import { migrateMap, startOptions, type NewLife } from '../src/engine/setup';
-import { chooseEvent, closeElection, continueEvent, continueReport, doAction, hireTalent, payRide, peek, submitGovern, talkTo, type GovernPlan } from '../src/engine/sim';
+import { chooseEvent, closeElection, continueEvent, continueReport, courtPerson, doAction, hireTalent, payRide, peek, submitGovern, talkTo, type GovernPlan } from '../src/engine/sim';
+import { answerOffer, endJob, endorse, makeOffer, repayDebt, sendChat, sendMoney, socialView, withdrawOffer } from '../src/engine/social';
 import type { Game, Looks } from '../src/engine/types';
 import { AWAY_MS, DEFAULT_RATE, comeBack, createSharedWorld, joinWorld, minutesDue, tickWorld, validPlace, type Intent } from '../src/engine/world';
 import type { Account, Store } from './store';
@@ -67,7 +68,8 @@ function viewFor(g: Game, seat: number): string | null {
   if (!seatOf(g, seat)) return null;
   bind(g, seat);
   const others = publicSeats(g, Date.now() - AWAY_MS).filter((s) => s.id !== seat);
-  const json = JSON.stringify({ ...g, seats: [], others });
+  // Of what players do with each other, you get only your part: your street, your messages, your deals.
+  const json = JSON.stringify({ ...g, seats: [], others, social: socialView(g, seat) });
   unbind(g);
   return json;
 }
@@ -171,6 +173,10 @@ function apply(g: Game, intent: Intent): { game?: Game; out: { ok: boolean; text
       const r = hireTalent(g, Number(intent.business), Number(intent.person));
       return { game: r.game, out: { ok: true, text: r.text } };
     }
+    case 'court': {
+      const r = courtPerson(g, Number(intent.person), intent.step === 'propose' ? 'propose' : 'ask');
+      return { game: r.game, out: { ok: r.ok, text: r.text } };
+    }
     case 'report':
       g.player.paperSeen = g.report?.week ?? g.player.paper?.week;
       return { game: continueReport(g), out: { ok: true, text: '' } };
@@ -185,6 +191,22 @@ function apply(g: Game, intent: Intent): { game?: Game; out: { ok: boolean; text
     case 'paperSeen':
       g.player.paperSeen = g.player.paper?.week;
       return { out: { ok: true, text: '' } };
+    case 'chat':
+      return { out: sendChat(g, intent.text, intent.to, Date.now()) };
+    case 'pay':
+      return { out: sendMoney(g, intent.to, intent.amount, Date.now()) };
+    case 'offer':
+      return { out: makeOffer(g, intent.to, intent.offer ?? {}, Date.now()) };
+    case 'answer':
+      return { out: answerOffer(g, intent.offer, intent.accept, Date.now()) };
+    case 'withdraw':
+      return { out: withdrawOffer(g, intent.offer) };
+    case 'endJob':
+      return { out: endJob(g, intent.business, intent.worker, Date.now()) };
+    case 'repay':
+      return { out: repayDebt(g, intent.to, intent.amount, Date.now()) };
+    case 'endorse':
+      return { out: endorse(g, intent.to, Date.now()) };
   }
   return fail('Unknown request.');
 }

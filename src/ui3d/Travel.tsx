@@ -5,9 +5,10 @@ import { lgaById, lgasOf, stateById, type StateId } from '../data/world';
 import { duration } from '../engine/calendar';
 import { naira } from '../engine/life';
 import { hood } from '../engine/map';
-import { MODES, airportOf, interstate, parseTrip, tripLabel, tripsFrom, type Trip } from '../engine/travel';
+import { MODES, airportOf, interstate, parseTrip, rushFactor, tripLabel, tripsFrom, type Trip } from '../engine/travel';
 import type { Game } from '../engine/types';
 import { pairs, useOverview, type CityOverview } from '../world/cityData';
+import { TripRide } from './TripRide';
 
 const CAPITAL_CITY: Record<StateId, string> = { LA: 'Lagos', KN: 'Kano', RI: 'Port Harcourt' };
 const flatPts = (flat: number[]) => pairs(flat).map(([x, z]) => `${x},${z}`).join(' ');
@@ -275,6 +276,8 @@ export interface TripShow {
   t0: number;
   ms: number;
   minutes: number;
+  /** Minutes after midnight when you set off, for the light and the traffic on the way. */
+  minute: number;
 }
 
 export function TripOverlay({ trip, onClose }: { trip: TripShow; onClose: () => void }) {
@@ -297,6 +300,8 @@ export function TripOverlay({ trip, onClose }: { trip: TripShow; onClose: () => 
   const inLagos = a.state === 'LA' && b.state === 'LA';
   const road = p.mode === 'danfo' || p.mode === 'brt' || p.mode === 'taxi' ? (o?.routes[pairKey(a.id, b.id)]?.via ?? []) : [];
   const title = `${MODES[p.mode].icon} ${MODES[p.mode].name} to ${a.state === b.state ? b.nick : stateById(b.state).name}`;
+  // What the signs over the road say on the way: the roads you take, or the towns you pass.
+  const signs = road.length ? road.slice(0, 4) : p.mode === 'bus' ? (interstate(a.state, b.state)?.towns ?? []) : [];
   const sub = p.mode === 'flight' ? `${a.airport} → ${b.airport}` : p.mode === 'bus' ? `Via ${interstate(a.state, b.state)?.towns.join(', ')}` : road.length ? `Via ${road.slice(0, 3).join(', ')}` : p.mode === 'ferry' ? 'Across the lagoon' : p.mode === 'rail' ? 'On the Red Line' : '';
   return (
     <div className="trip-overlay" role="status" onClick={onClose}>
@@ -305,11 +310,18 @@ export function TripOverlay({ trip, onClose }: { trip: TripShow; onClose: () => 
         <div className="kicker">
           {sub} · {duration(trip.minutes)}
         </div>
+        <TripRide mode={p.mode} via={signs} progress={progress} hour={(trip.minute / 60) % 24} rush={a.state === 'LA' ? rushFactor(trip.minute) : 1} />
         {inLagos ? o && <LagosMap o={o} from={a.id} to={b.id} path={lagosPath(o, a.id, b.id, p.mode)} progress={progress} /> : <NigeriaMap from={a.state} to={b.state} path={nigeriaPath(a.state, b.state, p.mode)} progress={progress} />}
         <div className="trip-foot">
-          <span className="muted">{progress < 1 ? `Leaving ${a.nick}…` : `Arrived: ${PLACES[MODES[p.mode].arrive].name.toLowerCase()} in ${b.nick}`}</span>
+          <span className="muted">
+            {progress >= 1
+              ? `Arrived: ${PLACES[MODES[p.mode].arrive].name.toLowerCase()} in ${b.nick}`
+              : signs.length && progress > 0.12
+                ? `On ${signs[Math.min(signs.length - 1, Math.floor(progress * signs.length))]}…`
+                : `Leaving ${a.nick}…`}
+          </span>
           <button className="btn btn-small" onClick={onClose}>
-            {progress < 1 ? 'Hide' : 'OK'}
+            {progress < 1 ? 'Skip the ride' : p.mode === 'flight' ? 'Get off' : 'Get down'}
           </button>
         </div>
       </div>

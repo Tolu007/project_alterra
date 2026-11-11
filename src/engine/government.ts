@@ -369,7 +369,8 @@ export const levelOf = (id: string): Level => (id === 'FED' ? 'federal' : STATES
 export function accrueSubsidy(g: Game) {
   const fp = g.fed.policy;
   if (!fp.subsidy) return;
-  const landing = g.macro.fxParallel * 0.55 + 120 * Math.sqrt(g.macro.priceLevel);
+  // The same landing cost the pump price is built from (see updatePrices): dear crude swells the bill.
+  const landing = g.macro.fxParallel * 0.55 * Math.pow(g.macro.oilPrice / 72, 0.55) + 120 * Math.sqrt(g.macro.priceLevel);
   g.macro.subsidyBill += (Math.max(0, landing - fp.subsidyPrice) * 0.35 * 1e9) / 1e9;
 }
 

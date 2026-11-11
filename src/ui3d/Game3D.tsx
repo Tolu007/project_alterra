@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { bizType } from '../data/businesses';
 import { ROLE_NAMES } from '../data/people';
 import { PLACES, tradeById, type PlaceId } from '../data/trades';
@@ -8,14 +8,20 @@ import { clockLabel, dateLabel, dayPart, duration, isRainySeason } from '../engi
 import { officeTitle } from '../engine/elections';
 import { HOURS, actionsAt, naira, placesIn, rideHailActions, type DayAction } from '../engine/life';
 import { COLS, MAIN_Z, PAVEMENT, ROAD_X, ROAD_Z, ROWS, SIDE_HALF, halfWidth, hood, type Pt } from '../engine/map';
-import { advanceClock, doAction, goTo, hireTalent, payRide, peek, rideFare, routineWeek, talkTo } from '../engine/sim';
+import { activeShocks } from '../engine/shocks';
+import { courtBlocked, datingOf, weddingCost } from '../engine/family';
+import { advanceClock, courtPerson, doAction, goTo, hireTalent, payRide, peek, rideFare, routineWeek, talkTo } from '../engine/sim';
 import { DAYS_PER_WEEK, type Game } from '../engine/types';
 import type { Intent } from '../engine/world';
 import { WeekReport } from '../ui/Modals';
 import { Portrait } from '../ui/Portrait';
+import { trafficAt } from '../world/City';
 import { World, type Float, type Selection, type WalkTarget } from '../world/World';
 import { CityMinimap } from './CityMap';
+import { Guide, useGuide } from './Guide';
 import { Phone, type AppId } from './Phone';
+import { SocialPanel, unreadSocial, type SocialTab } from './Social';
+import { sound } from './sound';
 import { TripOverlay, type TripShow } from './Travel';
 
 const ACTION_MS = 1500;
@@ -60,6 +66,7 @@ export function Game3D({ g, setGame, onQuit, online }: Props) {
   const [trip, setTrip] = useState<TripShow | null>(null);
   const floatId = useRef(0);
   const track = useRef<Pt>([0, 0]);
+  const trail = useRef<Pt[]>([]);
   const timers = useRef<number[]>([]);
   // The clock runs in real time between actions; the game catches up every few game minutes.
   const clock = useRef(g.minute);
@@ -75,6 +82,22 @@ export function Game3D({ g, setGame, onQuit, online }: Props) {
   const onlineRef = useRef(online);
   onlineRef.current = online;
   const [paperOpen, setPaperOpen] = useState(false);
+  // Other players: the chat and deals panel, which tab is showing and whose conversation is open.
+  const [social, setSocial] = useState<SocialTab | null>(null);
+  const [peer, setPeer] = useState<number | null>(null);
+  const unread = online ? unreadSocial(g) : 0;
+  const heard = useRef(unread);
+  useEffect(() => {
+    if (unread > heard.current && !social) sound.play('talk');
+    heard.current = unread;
+  }, [unread, social]);
+  // The getting-started list, for lives that have only just begun.
+  const guide = useGuide(`nh-guide:${g.seed}:${g.me}`, g.week === 0 && g.day <= 1, hood(g.player.at).real ? [] : ['map']);
+  /** Ticks off what an action taught you. */
+  const learn = (a: DayAction, hungerUp: number) => {
+    if (a.id === 'work' || a.id === 'oddjobs' || /\b(work|shift|sell|drive|ride|farm)\b/i.test(a.label)) guide.mark('work');
+    if (hungerUp > 10 || a.id === 'eat' || a.id === 'cook') guide.mark('eat');
+  };
   // Online, your character may be busy (or asleep) for a while; the screen counts it down.
   const [, setTick] = useState(0);
   useEffect(() => {
@@ -86,6 +109,25 @@ export function Game3D({ g, setGame, onQuit, online }: Props) {
   const asleepUntil = online && g.asleep && g.busyUntil > liveAbs(g, online) ? g.busyUntil : null;
 
   useEffect(() => () => timers.current.forEach((t) => window.clearTimeout(t)), []);
+  // Sound starts with your first tap or key, and follows the hour, the traffic, the rain and the light.
+  useEffect(() => {
+    const wake = () => sound.wake();
+    window.addEventListener('pointerdown', wake);
+    window.addEventListener('keydown', wake);
+    return () => {
+      window.removeEventListener('pointerdown', wake);
+      window.removeEventListener('keydown', wake);
+      void sound.set({ hour: 12, rainy: false, busy: 0, grid: 24, loud: 0 });
+    };
+  }, []);
+  const halfHour = Math.floor(g.minute / 30);
+  const rainyNow = isRainySeason(g.week);
+  useEffect(() => {
+    const l = lgaById(g.player.at);
+    const hour = (halfHour / 2) % 24;
+    sound.set({ hour, rainy: rainyNow, busy: trafficAt(hour), grid: g.prices[l.state].grid, loud: l.state === 'LA' ? 1 : 0.6 });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [halfHour, rainyNow, g.player.at]);
   useEffect(() => {
     if (!busyRef.current) clock.current = g.minute;
   }, [g.minute, g.day, g.week]);
@@ -163,6 +205,7 @@ export function Game3D({ g, setGame, onQuit, online }: Props) {
         return;
       }
       setGame(paid.game);
+      sound.play('ride');
       setTarget({ ...t, ride: true, nonce: Date.now() });
       return;
     }
@@ -170,6 +213,8 @@ export function Game3D({ g, setGame, onQuit, online }: Props) {
   };
 
   const arrive = (place: PlaceId, lot: number | null) => {
+    guide.mark('go');
+    sound.play('arrive');
     setGame(goTo(g, place, lot));
     setMenu({ place, lot });
     if (online) void online.send({ kind: 'goto', place, lot });
@@ -178,7 +223,7 @@ export function Game3D({ g, setGame, onQuit, online }: Props) {
   /** Shows the route on the map for a few seconds while you travel. */
   const showTrip = (a: DayAction, from: string) => {
     if (!a.id.startsWith('travel:')) return;
-    setTrip({ id: a.id, from, t0: Date.now(), ms: 4200, minutes: a.minutes });
+    setTrip({ id: a.id, from, t0: Date.now(), ms: 9000, minutes: a.minutes, minute: clock.current });
   };
 
   const run = (a: DayAction, where: Selection | null = menu) => {
@@ -194,15 +239,20 @@ export function Game3D({ g, setGame, onQuit, online }: Props) {
         if (!r) return setToast({ text: 'Could not reach the game server. Try again.', ok: false });
         setToast({ text: r.text, ok: r.ok });
         if (!r.ok) return where === menu ? setMenu(where) : undefined;
+        learn(a, 0);
         showTrip(a, from);
         const dm = gRef.current.player.money - before;
-        if (Math.abs(dm) >= 500) addFloats([{ text: `${dm > 0 ? '+' : '−'}${naira(Math.abs(dm))}`, tone: dm > 0 ? 'good' : 'bad' }]);
+        if (Math.abs(dm) >= 500) {
+          addFloats([{ text: `${dm > 0 ? '+' : '−'}${naira(Math.abs(dm))}`, tone: dm > 0 ? 'good' : 'bad' }]);
+          sound.play(dm > 0 ? 'cash' : 'spend');
+        } else sound.play('tap');
       });
       return;
     }
     const r = doAction(g, a.id);
     if (!r.ok) {
       setToast({ text: r.text, ok: false });
+      sound.play('bad');
       return;
     }
     showTrip(a, g.player.at);
@@ -211,7 +261,9 @@ export function Game3D({ g, setGame, onQuit, online }: Props) {
     const dm = next.player.money - g.player.money;
     const fl: Omit<Float, 'id'>[] = [];
     if (Math.abs(dm) >= 500) fl.push({ text: `${dm > 0 ? '+' : '−'}${naira(Math.abs(dm))}`, tone: dm > 0 ? 'good' : 'bad' });
+    sound.play(dm >= 500 ? 'cash' : dm <= -500 ? 'spend' : 'tap');
     const dh = next.player.hunger - g.player.hunger;
+    learn(a, dh);
     if (dh > 10) fl.push({ text: `Food +${Math.round(dh)}`, tone: 'info' });
     const ds = next.player.social - g.player.social;
     if (ds > 8) fl.push({ text: `Social +${Math.round(ds)}`, tone: 'info' });
@@ -254,8 +306,16 @@ export function Game3D({ g, setGame, onQuit, online }: Props) {
 
   const chat = (id: number) => {
     if (busy) return;
+    guide.mark('talk');
+    sound.play('talk');
     if (online) {
-      if (g.humans.includes(id)) return setToast({ text: `That is ${g.people[id].name}, another player.`, ok: true });
+      if (g.humans.includes(id)) {
+        // Another player: open their conversation.
+        setMenu(null);
+        setPeer(id);
+        setSocial('people');
+        return;
+      }
       setMenu(null);
       void online.send({ kind: 'talk', person: id }).then((r) => r && setTalk({ id, line: r.text }));
       return;
@@ -277,6 +337,18 @@ export function Game3D({ g, setGame, onQuit, online }: Props) {
     setTalk({ ...talk, note: r.text });
   };
 
+  const courtThem = (step: 'ask' | 'propose') => {
+    if (!talk) return;
+    if (online) {
+      void online.send({ kind: 'court', person: talk.id, step }).then((r) => r && setTalk({ ...talk, note: r.text }));
+      return;
+    }
+    const r = courtPerson(g, talk.id, step);
+    setGame(r.game);
+    setTalk({ ...talk, note: r.text });
+    if (r.ok) sound.play('done');
+  };
+
   const here = lgaById(g.player.at);
   const today = g.culture.filter((e) => e.week === g.week && e.day === g.day && (e.lga === here.id || e.lga === '*') && e.end > g.minute && !e.attended);
   const actions = menu ? actionsAt(peek(g, menu.place, menu.lot), menu.place) : [];
@@ -291,18 +363,26 @@ export function Game3D({ g, setGame, onQuit, online }: Props) {
   return (
     <div className={`g3d${menu && !busy ? ' menu-open' : ''}`}>
       <div className="g3d-canvas">
-        <World g={g} clock={clock} busy={busy} target={target} selected={menu} floats={floats} onWalk={(w) => walk(w)} onArrive={arrive} onTalk={chat} track={track} />
+        <World g={g} clock={clock} busy={busy} target={target} selected={menu} floats={floats} onWalk={(w) => walk(w)} onArrive={arrive} onTalk={chat} track={track} trail={trail} />
       </div>
 
       <Clock g={g} clock={clock} speed={speed} setSpeed={setSpeed} onQuit={onQuit} online={online} />
       <Wallet g={g} />
-      <Minimap g={g} track={track} selected={menu} onWalk={(w) => walk(w, ride)} />
+      <Minimap g={g} track={track} trail={trail} selected={menu} onWalk={(w) => walk(w, ride)} onWhole={() => guide.mark('map')} />
+      {!phone && !paperOpen && <Guide guide={guide} />}
+      {!busy && <RouteChip g={g} target={target} track={track} trail={trail} onStop={() => setTarget({ stop: true, nonce: Date.now() })} />}
       <Needs g={g} />
 
       <div className="hud-br">
         <button className="round-btn" onClick={() => setPlaces((v) => !v)} aria-expanded={places} title="Places on this street">
           🗺️<span>Places</span>
         </button>
+        {online && (
+          <button className="round-btn" onClick={() => setSocial(social ? null : 'street')} aria-expanded={!!social} title="Chat, deals and the other players">
+            💬<span>People</span>
+            {unread > 0 && <i className="badge">{unread}</i>}
+          </button>
+        )}
         <button className="round-btn" onClick={() => walk({ place: 'home' }, ride)} title={ride ? 'Ride home' : 'Walk home'}>
           🏠<span>Home</span>
         </button>
@@ -311,7 +391,14 @@ export function Game3D({ g, setGame, onQuit, online }: Props) {
             📰<span>Paper</span>
           </button>
         )}
-        <button className="round-btn phone-btn" onClick={() => setPhone('home')} title="Open your phone">
+        <button
+          className="round-btn phone-btn"
+          onClick={() => {
+            guide.mark('phone');
+            setPhone('home');
+          }}
+          title="Open your phone"
+        >
           📱<span>Phone</span>
           {g.news.filter((n) => n.week === g.week - 1).length > 0 && <i className="badge">{g.news.filter((n) => n.week === g.week - 1).length}</i>}
         </button>
@@ -368,7 +455,7 @@ export function Game3D({ g, setGame, onQuit, online }: Props) {
       )}
 
       {menu && !busy && <ActionMenu g={g} sel={menu} actions={actions} onRun={run} onClose={() => setMenu(null)} />}
-      {talk && <TalkCard g={g} talk={talk} onClose={() => setTalk(null)} onHire={hireThem} />}
+      {talk && <TalkCard g={g} talk={talk} onClose={() => setTalk(null)} onHire={hireThem} onCourt={courtThem} />}
       {toast && !menu && !talk && <Toast toast={toast} onDone={() => setToast(null)} />}
       {busy && !fade && span && (
         <div className="busy-pill">
@@ -389,10 +476,18 @@ export function Game3D({ g, setGame, onQuit, online }: Props) {
           }}
         />
       )}
+      {online && social && !phone && <SocialPanel g={g} tab={social} setTab={setSocial} peer={peer} setPeer={setPeer} send={online.send} onClose={() => setSocial(null)} />}
       {fade && <div className="night-fade">{fade}</div>}
       {phone && <Phone g={g} app={phone} setApp={setPhone} onClose={() => setPhone(null)} onWalk={(p) => { setPhone(null); walk({ place: p }, ride); }} onBook={book} />}
       {trip && <TripOverlay trip={trip} onClose={() => setTrip(null)} />}
-      {isRainySeason(g.week) && <div className="weather-chip">🌧️ Rainy season</div>}
+      <div className="chip-row">
+        {isRainySeason(g.week) && <div className="weather-chip">🌧️ Rainy season</div>}
+        {activeShocks(g).map(({ shock, weeks }) => (
+          <div key={shock.id} className={`weather-chip world-chip ${shock.tone}`} title={`${shock.effect} About ${weeks} more week${weeks === 1 ? '' : 's'}.`}>
+            {shock.icon} {shock.name} · crude ${Math.round(g.macro.oilPrice)}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -444,7 +539,22 @@ function Clock({ g, clock, speed, setSpeed, onQuit, online }: { g: Game; clock: 
           📍 {here.nick}, {stateById(here.state).name}
         </div>
       </div>
+      <SoundButton />
     </div>
+  );
+}
+
+/** Turns the street's sound on and off; the choice is remembered. */
+function SoundButton() {
+  const muted = useSyncExternalStore(
+    (fn) => sound.subscribe(fn),
+    () => sound.muted,
+  );
+  return (
+    <button className="sound-btn" onClick={() => sound.setMuted(!muted)} aria-pressed={!muted} title={muted ? 'Turn sound on' : 'Turn sound off'}>
+      {muted ? '🔇' : '🔊'}
+      <span>{muted ? 'Sound off' : 'Sound on'}</span>
+    </button>
   );
 }
 
@@ -538,7 +648,7 @@ function ActionMenu({ g, sel, actions, onRun, onClose }: { g: Game; sel: Selecti
   );
 }
 
-function TalkCard({ g, talk, onClose, onHire }: { g: Game; talk: { id: number; line: string; note?: string }; onClose: () => void; onHire: (bizId: number) => void }) {
+function TalkCard({ g, talk, onClose, onHire, onCourt }: { g: Game; talk: { id: number; line: string; note?: string }; onClose: () => void; onHire: (bizId: number) => void; onCourt: (step: 'ask' | 'propose') => void }) {
   const who = g.people[talk.id];
   const openings = playerBusinesses(g).filter((b) => b.lga === g.player.at && b.staff.length < staffCap(b));
   const canHire = who.employer === null && !who.office && who.role !== 'politician' && who.role !== 'godfather' && openings.length > 0;
@@ -561,6 +671,18 @@ function TalkCard({ g, talk, onClose, onHire }: { g: Game; talk: { id: number; l
                 Hire for {bizType(b.type).name.toLowerCase()}
               </button>
             ))}
+          {!courtBlocked(g, talk.id) &&
+            (datingOf(g)?.id === talk.id ? (
+              <button className="btn btn-small" onClick={() => onCourt('propose')} title={`A wedding costs about ${naira(weddingCost(g))}. Needs relationship 80.`}>
+                💍 Propose
+              </button>
+            ) : (
+              who.relation >= 30 && (
+                <button className="btn btn-small" onClick={() => onCourt('ask')} title="Needs relationship 45">
+                  💐 Ask out
+                </button>
+              )
+            ))}
           <button className="btn btn-small" onClick={onClose}>
             Bye
           </button>
@@ -582,8 +704,52 @@ function Toast({ toast, onDone }: { toast: { text: string; ok: boolean }; onDone
   );
 }
 
+/** While you are on your way somewhere: where to, how far is left, and a button to stop. */
+function RouteChip({ g, target, track, trail, onStop }: { g: Game; target: WalkTarget | null; track: React.MutableRefObject<Pt>; trail: React.MutableRefObject<Pt[]>; onStop: () => void }) {
+  const [left, setLeft] = useState(0);
+  useEffect(() => {
+    const t = window.setInterval(() => {
+      let d = 0;
+      let at = track.current;
+      for (const p of trail.current) {
+        d += Math.hypot(p[0] - at[0], p[1] - at[1]);
+        at = p;
+      }
+      setLeft(d);
+    }, 200);
+    return () => window.clearInterval(t);
+  }, [track, trail]);
+  if (!target || target.stop || left < 1.5) return null;
+  const h = hood(g.player.at);
+  const biz = target.place === 'lot' && target.lot !== undefined ? businessOn(g, g.player.at, target.lot) : undefined;
+  const plot = target.place && target.place !== 'lot' && target.place !== 'busstop' ? h.plots[h.place[target.place] ?? -1] : undefined;
+  const name = !target.place
+    ? 'that spot'
+    : target.place === 'lot'
+      ? (biz?.name ?? 'the plot')
+      : target.place === 'home'
+        ? 'home'
+        : target.place === 'busstop'
+          ? h.real ? `${h.real.stopName} bus stop` : 'the bus stop'
+          : (plot?.real ?? PLACES[target.place].name);
+  // Districts drawn from the real map are shrunk; say the distance as it is on the ground.
+  const metres = left * (h.real?.scale ?? 3);
+  const far = metres >= 1000 ? `${(metres / 1000).toFixed(1)} km` : `${Math.max(10, Math.round(metres / 10) * 10)} m`;
+  return (
+    <div className="route-chip" role="status">
+      <span className="route-dot" aria-hidden="true" />
+      <span className="route-text">
+        {target.ride ? 'Riding to' : 'Walking to'} <b>{name}</b> · {far}
+      </span>
+      <button onClick={onStop} aria-label="Stop here" title="Stop here">
+        ✕
+      </button>
+    </div>
+  );
+}
+
 /** A map of the neighbourhood: roads, places and plots, with you on it. Tap a place to go there. */
-function Minimap({ g, track, selected, onWalk }: { g: Game; track: React.MutableRefObject<Pt>; selected: Selection | null; onWalk: (t: Omit<WalkTarget, 'nonce'>) => void }) {
+function Minimap({ g, track, trail, selected, onWalk, onWhole }: { g: Game; track: React.MutableRefObject<Pt>; trail: React.MutableRefObject<Pt[]>; selected: Selection | null; onWalk: (t: Omit<WalkTarget, 'nonce'>) => void; onWhole?: () => void }) {
   const [open, setOpen] = useState(() => typeof window === 'undefined' || window.innerWidth >= 700);
   const dot = useRef<SVGCircleElement>(null);
   const lga = g.player.at;
@@ -602,7 +768,7 @@ function Minimap({ g, track, selected, onWalk }: { g: Game; track: React.Mutable
   const minZ = h.farmland ? ROWS[0] - 40 : ROAD_Z[0];
   const view = `${ROAD_X[0]} ${minZ} ${ROAD_X[1] - ROAD_X[0]} ${ROAD_Z[1] - minZ}`;
   const placeOf = new Map<number, PlaceId>((Object.entries(h.place) as [PlaceId, number][]).map(([p, id]) => [id, p]));
-  if (open && h.real) return <CityMinimap g={g} track={track} selected={selected} onWalk={onWalk} onClose={() => setOpen(false)} />;
+  if (open && h.real) return <CityMinimap g={g} track={track} trail={trail} selected={selected} onWalk={onWalk} onClose={() => setOpen(false)} onWhole={onWhole} />;
   if (!open) {
     return (
       <button className="minimap-toggle" onClick={() => setOpen(true)} title="Show the map">

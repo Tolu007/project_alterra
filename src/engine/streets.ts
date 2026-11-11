@@ -9,6 +9,8 @@ export interface StreetRoad {
   c: string;
   w: number;
   b?: 1;
+  /** One-way, in the order of its points. */
+  o?: 1;
   /** Not for walking: expressways, ramps and streets cut off from the rest. */
   x?: 1;
   n?: string;
@@ -21,6 +23,8 @@ interface Edge {
   /** Half the road's width. */
   hw: number;
   len: number;
+  /** One-way for vehicles, from a to b. */
+  ow?: boolean;
 }
 
 interface Net {
@@ -64,7 +68,7 @@ export function registerStreets(lga: string, roads: StreetRoad[], cross: number[
     for (let i = 2; i < r.p.length; i += 2) {
       const a = node(r.p[i - 2], r.p[i - 1]);
       const b = node(r.p[i], r.p[i + 1]);
-      if (a !== b) edges.push({ a, b, hw: r.w / 2, len: Math.hypot(xs[a] - xs[b], zs[a] - zs[b]) });
+      if (a !== b) edges.push({ a, b, hw: r.w / 2, len: Math.hypot(xs[a] - xs[b], zs[a] - zs[b]), ...(r.o ? { ow: true } : {}) });
     }
   }
   for (let i = 0; i + 3 < cross.length; i += 4) {
@@ -135,7 +139,7 @@ function snap(net: Net, p: Pt): Snap | null {
   return best;
 }
 
-/** The left-hand normal of a direction, in the x–z plane. */
+/** The normal of a direction in the x–z plane. With x east and z south it points to the right of travel. */
 const left = (dx: number, dz: number): Pt => {
   const l = Math.hypot(dx, dz) || 1;
   return [-dz / l, dx / l];
@@ -201,39 +205,58 @@ class Heap {
   }
 }
 
+/** How far to the right of a road's centre line a keke or an okada rides. */
+const rideLane = (e: Edge) => (e.ow ? e.hw * 0.45 : e.hw * 0.5 + 0.1);
+
 /**
- * A walking path from one point to another along the streets: out to the pavement, along the roads
- * (keeping to one side), and over to the destination. Without the district's streets, a straight line.
+ * A path from one point to another along the streets. On foot: out to the pavement, along the roads
+ * (keeping to one side), and over to the destination. With `drive`, as a keke or an okada goes: out into the
+ * right-hand lane, along the roads the right way down one-way streets, and in to the kerb at the end.
+ * Without the district's streets, a straight line.
  */
-export function streetRoute(lga: string, from: Pt, to: Pt): Pt[] {
+export function streetRoute(lga: string, from: Pt, to: Pt, drive = false): Pt[] {
   const net = nets.get(lga);
   if (!net) return [from, to];
   const sa = snap(net, from);
   const sb = snap(net, to);
   if (!sa || !sb) return [from, to];
-  const { xs, zs, edges } = net;
+  return trace(net, sa, sb, from, to, drive, drive) ?? trace(net, sa, sb, from, to, drive, false) ?? [from, to];
+}
 
-  // Centre-line points and the half-width of the road leading to each.
+/** The path itself. `oneWay` keeps to the direction of one-way streets; null if there is no way through. */
+function trace(net: Net, sa: Snap, sb: Snap, from: Pt, to: Pt, drive: boolean, oneWay: boolean): Pt[] | null {
+  const { xs, zs, edges } = net;
+  const ea = edges[sa.edge];
+  const eb = edges[sb.edge];
+  const offset = (e: Edge) => (drive ? rideLane(e) : e.hw + KERB);
+
+  // Centre-line points and how far from the centre line to keep on the road leading to each.
   let centre: Pt[];
   let widths: number[];
-  if (sa.edge === sb.edge) {
+  if (sa.edge === sb.edge && !(oneWay && ea.ow && sb.t < sa.t)) {
     centre = [sa.pt, sb.pt];
-    widths = [edges[sa.edge].hw];
+    widths = [offset(ea)];
   } else {
-    const ea = edges[sa.edge];
-    const eb = edges[sb.edge];
-    const goal = new Map<number, number>([
-      [eb.a, eb.len * sb.t],
-      [eb.b, eb.len * (1 - sb.t)],
-    ]);
+    const goal = new Map<number, number>(
+      oneWay && eb.ow
+        ? [[eb.a, eb.len * sb.t]]
+        : [
+            [eb.a, eb.len * sb.t],
+            [eb.b, eb.len * (1 - sb.t)],
+          ],
+    );
     const cost = new Map<number, number>();
     const prev = new Map<number, number>();
     const heap = new Heap();
     const h = (i: number) => Math.hypot(xs[i] - sb.pt[0], zs[i] - sb.pt[1]);
-    for (const [n, c] of [
-      [ea.a, ea.len * sa.t],
-      [ea.b, ea.len * (1 - sa.t)],
-    ] as const) {
+    const starts: [number, number][] =
+      oneWay && ea.ow
+        ? [[ea.b, ea.len * (1 - sa.t)]]
+        : [
+            [ea.a, ea.len * sa.t],
+            [ea.b, ea.len * (1 - sa.t)],
+          ];
+    for (const [n, c] of starts) {
       cost.set(n, c);
       prev.set(n, -1);
       heap.push([c + h(n), n]);
@@ -254,6 +277,9 @@ export function streetRoute(lga: string, from: Pt, to: Pt): Pt[] {
       }
       for (const ei of net.out[n]) {
         const e = edges[ei];
+        if (oneWay && e.ow && e.b === n) continue;
+        // Vehicles cannot use the footpaths over a median or a railway.
+        if (drive && e.hw === 0) continue;
         const m = e.a === n ? e.b : e.a;
         const nc = c + e.len;
         if (nc < (cost.get(m) ?? Infinity)) {
@@ -263,19 +289,19 @@ export function streetRoute(lga: string, from: Pt, to: Pt): Pt[] {
         }
       }
     }
-    if (end < 0) return [from, to];
+    if (end < 0) return null;
     const nodes: number[] = [];
     for (let n = end; n >= 0; n = prev.get(n)!) nodes.push(n);
     nodes.reverse();
     centre = [sa.pt, ...nodes.map((n): Pt => [xs[n], zs[n]]), sb.pt];
-    widths = [ea.hw];
+    widths = [offset(ea)];
     for (let i = 1; i < nodes.length; i++) {
       const a = nodes[i - 1];
       const b = nodes[i];
       const e = net.out[a].map((k) => edges[k]).find((x) => (x.a === a && x.b === b) || (x.a === b && x.b === a));
-      widths.push(e?.hw ?? ea.hw);
+      widths.push(e ? offset(e) : offset(ea));
     }
-    widths.push(eb.hw);
+    widths.push(offset(eb));
   }
 
   // Drop zero-length steps, keeping widths in line with the segments that remain.
@@ -290,11 +316,11 @@ export function streetRoute(lga: string, from: Pt, to: Pt): Pt[] {
   }
   if (pts.length < 2) return tidy([from, to]);
 
-  // Walk on the pavement on the side you start from.
+  // Walk on the pavement on the side you start from; ride in the right-hand lane.
   const d0: Pt = [pts[1][0] - pts[0][0], pts[1][1] - pts[0][1]];
   const n0 = left(d0[0], d0[1]);
-  const side = n0[0] * (from[0] - pts[0][0]) + n0[1] * (from[1] - pts[0][1]) >= 0 ? 1 : -1;
-  const offs = hws.map((hw) => side * (hw + KERB));
+  const side = drive || n0[0] * (from[0] - pts[0][0]) + n0[1] * (from[1] - pts[0][1]) >= 0 ? 1 : -1;
+  const offs = hws.map((hw) => side * hw);
   const path: Pt[] = [from];
   const norms = pts.slice(1).map((p, i) => left(p[0] - pts[i][0], p[1] - pts[i][1]));
   path.push([pts[0][0] + norms[0][0] * offs[0], pts[0][1] + norms[0][1] * offs[0]]);

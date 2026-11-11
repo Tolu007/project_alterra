@@ -4,8 +4,9 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import type { SceneStyle } from '../data/world';
 import type { Hood } from '../engine/map';
+import { along, buildDriveNet, findBusStop, lane, laneOffsets, makeTraffic, offsetLine, stepTraffic, type CarSpec, type P2, type Traffic } from '../engine/traffic';
 import type { Looks } from '../engine/types';
-import { Brt, Car, Danfo, Keke, Okada, Person3D, Truck, mat } from './Actors';
+import { Brt, Car, Danfo, HeadTray, Keke, Okada, Person3D, Truck, Umbrella, mat } from './Actors';
 import { Box, Flag, Roof, Sign, Windows, earthen } from './Buildings';
 import { pairs, type CityRender } from './cityData';
 import { flagTexture, signTexture } from './textures';
@@ -15,7 +16,6 @@ import { WALLS, seeded } from './Town';
 // buildings along the streets and a sea of rooftops behind them. Everything repeated is merged into a
 // handful of meshes or drawn as instances, so a whole district costs about as much as the old grid town.
 
-type P2 = [number, number];
 const PAV = 2.5;
 
 const norm = (x: number, z: number): P2 => {
@@ -56,17 +56,6 @@ function disc(x: number, z: number, r: number, y: number, pos: number[], idx: nu
   const seg = 10;
   for (let i = 0; i <= seg; i++) pos.push(x + Math.cos((i / seg) * Math.PI * 2) * r, y, z + Math.sin((i / seg) * Math.PI * 2) * r);
   for (let i = 1; i <= seg; i++) idx.push(base, base + i + 1, base + i);
-}
-
-/** A polyline moved sideways by d (positive: to the right of travel, in this x-east, z-south world). */
-function offsetLine(pts: P2[], d: number): P2[] {
-  return pts.map((p, i) => {
-    const d0 = i > 0 ? norm(p[0] - pts[i - 1][0], p[1] - pts[i - 1][1]) : null;
-    const d1 = i < pts.length - 1 ? norm(pts[i + 1][0] - p[0], pts[i + 1][1] - p[1]) : null;
-    const m = d0 && d1 ? norm(d0[0] + d1[0], d0[1] + d1[1]) : (d0 ?? d1)!;
-    const cos = d0 && d1 ? Math.max(0.4, m[0] * d1[0] + m[1] * d1[1]) : 1;
-    return [p[0] - (m[1] * d) / cos, p[1] + (m[0] * d) / cos];
-  });
 }
 
 function geometry(pos: number[], idx: number[]): THREE.BufferGeometry {
@@ -148,14 +137,14 @@ export function CityGround({ city, h, style, onClick }: { city: CityRender; h: H
         <planeGeometry args={[h.bounds.maxX - h.bounds.minX + 900, h.bounds.maxZ - h.bounds.minZ + 900]} />
       </mesh>
       {areas.map((a) => a.g && <mesh key={a.k} geometry={a.g} material={mat(AREA_COLOURS[a.k])} receiveShadow onClick={onClick} />)}
-      {water && <mesh geometry={water} material={mat('#3f84a8', { rough: 0.25, metal: 0.15 })} />}
+      {water && <mesh geometry={water} material={mat('#3b8fb5', { rough: 0.18, metal: 0.25 })} />}
       {islands && <mesh geometry={islands} material={mat(soil)} receiveShadow onClick={onClick} />}
       {runways && <mesh geometry={runways} material={mat('#5d5d5a')} receiveShadow />}
     </group>
   );
 }
 
-const ROAD_Y: Record<string, number> = { local: 0.014, link: 0.016, minor: 0.018, major: 0.02 };
+const ROAD_Y: Record<string, number> = { local: 0.014, link: 0.017, minor: 0.02, major: 0.023 };
 
 /** The streets: pavements, tar (or laterite on neglected side streets), lane markings, railings on bridges, and the railway. */
 export function CityRoads({ city, tar, onClick }: { city: CityRender; tar: boolean; onClick: (e: never) => void }) {
@@ -175,29 +164,48 @@ export function CityRoads({ city, tar, onClick }: { city: CityRender; tar: boole
       const y = ROAD_Y[r.c] ?? 0.014;
       ribbon(pts, hw, y, surface.pos, surface.idx);
       for (const p of [pts[0], pts[pts.length - 1]]) disc(p[0], p[1], hw, y, surface.pos, surface.idx);
-      if (r.c === 'major') {
-        // A dashed centre line.
-        const m = b('marking');
-        for (let i = 1; i < pts.length; i++) {
-          const [a, c] = [pts[i - 1], pts[i]];
+      if (r.c === 'local' || r.c === 'link') continue;
+      // Lane lines where the traffic's lanes meet: white dashes between lanes going the same way, a
+      // yellow line down the middle of a two-way road. They stop short of the ends, where roads join.
+      const offs = laneOffsets(r.w, !!r.o);
+      const lines: { d: number; k: string; dash: boolean }[] = [];
+      for (let i = 1; i < offs.length; i++) lines.push({ d: (offs[i - 1] + offs[i]) / 2, k: 'marking', dash: true });
+      if (!r.o) {
+        for (let i = 1; i < offs.length; i++) lines.push({ d: -(offs[i - 1] + offs[i]) / 2, k: 'marking', dash: true });
+        lines.push({ d: 0, k: 'centre', dash: offs.length === 1 });
+      }
+      for (const ln of lines) {
+        const m = b(ln.k);
+        const side = ln.d ? offsetLine(pts, ln.d) : pts;
+        const total = lane(side).len;
+        let gone = 0;
+        for (let i = 1; i < side.length; i++) {
+          const [a, c] = [side[i - 1], side[i]];
           const L = Math.hypot(c[0] - a[0], c[1] - a[1]);
-          for (let s = 2; s + 3 < L; s += 7) {
-            const t0 = s / L;
-            const t1 = (s + 3) / L;
-            ribbon(
-              [
-                [a[0] + (c[0] - a[0]) * t0, a[1] + (c[1] - a[1]) * t0],
-                [a[0] + (c[0] - a[0]) * t1, a[1] + (c[1] - a[1]) * t1],
-              ],
-              0.14,
-              0.026,
-              m.pos,
-              m.idx,
-            );
-          }
+          const from = Math.max(0, 7 - gone);
+          const to = Math.min(L, total - 7 - gone);
+          gone += L;
+          if (to - from < 1) continue;
+          const at = (d: number): P2 => [a[0] + ((c[0] - a[0]) * d) / L, a[1] + ((c[1] - a[1]) * d) / L];
+          if (!ln.dash) ribbon([at(from), at(to)], 0.11, 0.034, m.pos, m.idx);
+          else for (let d = from + 1; d + 2.6 < to; d += 6.5) ribbon([at(d), at(d + 2.6)], 0.11, 0.034, m.pos, m.idx);
         }
       }
     }
+    // Where main roads meet, a patch of plain tar covers the ends of the lines.
+    const meet = new Map<string, { n: number; w: number; x: number; z: number }>();
+    for (const r of city.roads) {
+      if (r.c === 'local') continue;
+      for (const i of [0, r.p.length - 2]) {
+        const k = `${r.p[i]},${r.p[i + 1]}`;
+        const j = meet.get(k) ?? { n: 0, w: 0, x: r.p[i], z: r.p[i + 1] };
+        j.n++;
+        j.w = Math.max(j.w, r.w);
+        meet.set(k, j);
+      }
+    }
+    const patch = b('patch');
+    for (const j of meet.values()) if (j.n > 1) disc(j.x, j.z, j.w / 2, 0.03, patch.pos, patch.idx);
     for (const line of city.rail) {
       const pts = pairs(line);
       const bed = b('ballast');
@@ -238,21 +246,23 @@ export function CityRoads({ city, tar, onClick }: { city: CityRender; tar: boole
     [layers, railings],
   );
   const colour: Record<string, string> = {
-    pavement: '#b8b0a2',
-    shoulder: '#bf9f78',
-    laterite: '#b5845a',
-    local: '#55524c',
-    link: '#47443f',
-    minor: '#4a4743',
-    major: '#3b3936',
-    marking: '#eee6d4',
-    ballast: '#7f766b',
+    pavement: '#cfc7b8',
+    shoulder: '#c7a981',
+    laterite: '#b98a5f',
+    local: '#5e5f61',
+    link: '#4c4e52',
+    minor: '#4c4e52',
+    major: '#4c4e52',
+    patch: '#4c4e52',
+    marking: '#f4f0e4',
+    centre: '#f0c64a',
+    ballast: '#857c70',
     rails: '#3a3a3a',
   };
   return (
     <group>
       {layers.map((l) => (
-        <mesh key={l.k} geometry={l.g} material={mat(colour[l.k] ?? '#555')} receiveShadow onClick={l.k === 'marking' || l.k === 'rails' ? undefined : onClick} />
+        <mesh key={l.k} geometry={l.g} material={mat(colour[l.k] ?? '#555')} receiveShadow onClick={l.k === 'marking' || l.k === 'centre' || l.k === 'rails' ? undefined : onClick} />
       ))}
       {railings && <mesh geometry={railings} material={mat('#c9c2b2')} castShadow receiveShadow />}
     </group>
@@ -289,8 +299,63 @@ interface Inst {
   flat: boolean;
 }
 
+/** How many windows are lit: none by day, half of them on a night with light, a few (generators) without. */
+const WINDOW_GLOW = { value: 0 };
+
+/**
+ * The walls of ordinary buildings: rows of windows drawn by the shader on every wall, floor by floor, sized
+ * to the building, so thousands of plain boxes read as houses and blocks of flats. At night some glow.
+ */
+const WALL_MATERIAL = (() => {
+  const m = new THREE.MeshStandardMaterial({ flatShading: true, roughness: 0.85 });
+  m.onBeforeCompile = (sh) => {
+    sh.uniforms.uGlow = WINDOW_GLOW;
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vBoxP;\nvarying vec3 vBoxN;\nvarying vec3 vBoxS;\nvarying float vBoxSeed;')
+      .replace(
+        '#include <begin_vertex>',
+        `#include <begin_vertex>
+        #ifdef USE_INSTANCING
+          vBoxS = vec3(length(instanceMatrix[0].xyz), length(instanceMatrix[1].xyz), length(instanceMatrix[2].xyz));
+          vBoxSeed = instanceMatrix[3].x * 0.37 + instanceMatrix[3].z * 0.73;
+        #else
+          vBoxS = vec3(1.0);
+          vBoxSeed = 0.0;
+        #endif
+        vBoxP = position * vBoxS;
+        vBoxN = normal;`,
+      );
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nuniform float uGlow;\nvarying vec3 vBoxP;\nvarying vec3 vBoxN;\nvarying vec3 vBoxS;\nvarying float vBoxSeed;\nfloat boxHash(vec2 q) { return fract(sin(dot(q, vec2(127.1, 311.7))) * 43758.5453); }')
+      .replace(
+        '#include <color_fragment>',
+        `#include <color_fragment>
+        float boxGlow = 0.0;
+        if (abs(vBoxN.y) < 0.5) {
+          bool sideways = abs(vBoxN.x) > 0.5;
+          float across = sideways ? vBoxP.z : vBoxP.x;
+          float halfW = (sideways ? vBoxS.z : vBoxS.x) * 0.5;
+          float up = vBoxP.y + vBoxS.y * 0.5;
+          vec2 cell = vec2(across / 2.5 + 0.5, up / 2.9);
+          vec2 id = floor(cell);
+          vec2 f = fract(cell);
+          float mid = (id.x - 0.5 + 0.5) * 2.5;
+          bool fits = abs(mid) + 1.0 < halfW && (id.y + 1.0) * 2.9 < vBoxS.y + 0.3;
+          if (fits && f.x > 0.24 && f.x < 0.76 && f.y > 0.34 && f.y < 0.8) {
+            float r = boxHash(id + vec2(vBoxSeed, sideways ? 7.0 : 3.0));
+            float on = step(r, uGlow);
+            diffuseColor.rgb = mix(diffuseColor.rgb * 0.5, vec3(0.2, 0.27, 0.33), 0.7);
+            boxGlow = on * (0.6 + 0.4 * boxHash(id.yx + vBoxSeed));
+          }
+        }`,
+      )
+      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += boxGlow * vec3(1.0, 0.76, 0.4);');
+  };
+  return m;
+})();
+
 /** Many boxes of one kind in one draw call. */
-function Instances({ items, geo, place, colour, cast = true }: { items: Inst[]; geo: THREE.BufferGeometry; place: (it: Inst, m: THREE.Object3D) => void; colour: (it: Inst) => string; cast?: boolean }) {
+function Instances({ items, geo, place, colour, cast = true, material }: { items: Inst[]; geo: THREE.BufferGeometry; place: (it: Inst, m: THREE.Object3D) => void; colour: (it: Inst) => string; cast?: boolean; material?: THREE.Material }) {
   const ref = useRef<THREE.InstancedMesh>(null);
   useLayoutEffect(() => {
     const m = ref.current;
@@ -312,8 +377,8 @@ function Instances({ items, geo, place, colour, cast = true }: { items: Inst[]; 
   }, [items, place, colour]);
   if (!items.length) return null;
   return (
-    <instancedMesh ref={ref} args={[geo, undefined, items.length]} castShadow={cast} receiveShadow>
-      <meshStandardMaterial flatShading roughness={0.85} />
+    <instancedMesh ref={ref} args={[geo, material, items.length]} castShadow={cast} receiveShadow>
+      {!material && <meshStandardMaterial flatShading roughness={0.85} />}
     </instancedMesh>
   );
 }
@@ -339,7 +404,8 @@ const wallOf = (it: Inst) => it.wall;
 const roofOf = (it: Inst) => it.roof;
 
 /** The ordinary buildings along the streets and the rooftops of the compounds behind them. */
-export function CityBlocks({ city, style }: { city: CityRender; style: SceneStyle }) {
+export function CityBlocks({ city, style, glow }: { city: CityRender; style: SceneStyle; glow: number }) {
+  WINDOW_GLOW.value = glow;
   const { gables, flats } = useMemo(() => {
     const walls = style === 'lagos-rich' ? RICH_WALLS : [...WALLS[style], '#e8dcc6', '#d9cbb0', '#cfc6b8'];
     const all: Inst[] = [];
@@ -358,7 +424,7 @@ export function CityBlocks({ city, style }: { city: CityRender; style: SceneStyl
   const all = useMemo(() => [...gables, ...flats], [gables, flats]);
   return (
     <group>
-      <Instances items={all} geo={BOX} place={placeWalls} colour={wallOf} />
+      <Instances items={all} geo={BOX} place={placeWalls} colour={wallOf} material={WALL_MATERIAL} />
       <Instances items={gables} geo={GABLE} place={placeGable} colour={roofOf} />
       <Instances items={flats} geo={BOX} place={placeSlab} colour={roofOf} />
     </group>
@@ -503,38 +569,10 @@ export function CityLamps({ lamps, lightsOn, playerPos }: { lamps: [number, numb
 
 // ───────────── moving along real roads ─────────────
 
-interface Lane {
-  pts: P2[];
-  /** Distance along the lane at each point. */
-  at: number[];
-  len: number;
-}
-
-function lane(pts: P2[]): Lane {
-  const at = [0];
-  for (let i = 1; i < pts.length; i++) at.push(at[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
-  return { pts, at, len: at[at.length - 1] };
-}
-
-/** Where on a lane, and which way it points, at distance s. `hint` remembers the last segment to save searching. */
-function along(l: Lane, s: number, hint: { i: number }): { x: number; z: number; dx: number; dz: number } {
-  let i = Math.min(hint.i, l.pts.length - 2);
-  if (l.at[i] > s) i = 0;
-  while (i < l.pts.length - 2 && l.at[i + 1] < s) i++;
-  hint.i = i;
-  const [a, b] = [l.pts[i], l.pts[i + 1]];
-  const seg = l.at[i + 1] - l.at[i] || 1;
-  const t = Math.max(0, Math.min(1, (s - l.at[i]) / seg));
-  return { x: a[0] + (b[0] - a[0]) * t, z: a[1] + (b[1] - a[1]) * t, dx: (b[0] - a[0]) / seg, dz: (b[1] - a[1]) / seg };
-}
-
-/**
- * A vehicle driving along a road and back on the other side (they drive on the right), or a person pacing a
- * pavement. Out of sight when far from you.
- */
-function RoadMover({ pts, offset, speed, start, playerPos, walker, children }: { pts: P2[]; offset: number; speed: number; start: number; playerPos: React.MutableRefObject<THREE.Vector3>; walker?: boolean; children: ReactNode }) {
+/** A person pacing a pavement, there and back. Out of sight when far from you. */
+function RoadMover({ pts, offset, speed, start, playerPos, children }: { pts: P2[]; offset: number; speed: number; start: number; playerPos: React.MutableRefObject<THREE.Vector3>; children: ReactNode }) {
   const ref = useRef<THREE.Group>(null);
-  const lanes = useMemo(() => [lane(offsetLine(pts, offset)), lane(offsetLine([...pts].reverse(), walker ? -offset : offset))], [pts, offset, walker]);
+  const lanes = useMemo(() => [lane(offsetLine(pts, offset)), lane(offsetLine([...pts].reverse(), -offset))], [pts, offset]);
   const t = useRef(start);
   const hint = useRef([{ i: 0 }, { i: 0 }]);
   useFrame((_, dt) => {
@@ -548,58 +586,218 @@ function RoadMover({ pts, offset, speed, start, playerPos, walker, children }: {
     const far = Math.abs(q.x - playerPos.current.x) + Math.abs(q.z - playerPos.current.z) > 200;
     g.visible = !far;
     if (far) return;
-    g.position.set(q.x, walker ? 0.16 : Math.abs(Math.sin(t.current * 3)) * 0.03, q.z);
-    // Vehicles are built facing +x, people facing +z.
-    g.rotation.y = walker ? Math.atan2(q.dx, q.dz) : Math.atan2(-q.dz, q.dx);
+    g.position.set(q.x, 0.16, q.z);
+    g.rotation.y = Math.atan2(q.dx, q.dz);
   });
   return <group ref={ref}>{children}</group>;
 }
 
-const CAR_COLOURS = ['#d6d6d6', '#2f63ad', '#b8352a', '#1f1d1a', '#e9e2d4', '#6d6a64'];
+const CAR_COLOURS = ['#d6d6d6', '#2f63ad', '#b8352a', '#1f1d1a', '#e9e2d4', '#6d6a64', '#8a1f2b', '#3d6b4f'];
 
-/** Danfos, BRT buses, cars, kekes, okadas and trucks on the district's busiest real roads. */
-export function CityTraffic({ city, lagos, kekeColor, okada, playerPos }: { city: CityRender; lagos: boolean; kekeColor: string; okada: boolean; playerPos: React.MutableRefObject<THREE.Vector3> }) {
-  const list = useMemo(() => {
+/** Headlamps and tail lamps, for a vehicle built facing +x. */
+function Lamps({ len, w = 1.5, y = 0.8 }: { len: number; w?: number; y?: number }) {
+  return (
+    <>
+      {[-1, 1].map((k) => (
+        <mesh key={`h${k}`} position={[len / 2 + 0.02, y, (k * w) / 2.6]} material={mat('#fff6d8', { emissive: '#ffe9a8' })}>
+          <boxGeometry args={[0.08, 0.2, 0.3]} />
+        </mesh>
+      ))}
+      {[-1, 1].map((k) => (
+        <mesh key={`t${k}`} position={[-len / 2 - 0.02, y, (k * w) / 2.6]} material={mat('#ff3b2f', { emissive: '#ff2a1a' })}>
+          <boxGeometry args={[0.08, 0.18, 0.28]} />
+        </mesh>
+      ))}
+    </>
+  );
+}
+
+/** How much of the traffic is out at this hour: rush hours full, nights nearly empty. */
+export function trafficAt(hour: number): number {
+  if ((hour >= 6.5 && hour < 9.5) || (hour >= 16 && hour < 19.5)) return 1;
+  if (hour >= 9.5 && hour < 16) return 0.75;
+  if (hour >= 19.5 && hour < 22) return 0.55;
+  return hour >= 5 && hour < 6.5 ? 0.5 : 0.22;
+}
+
+const FLEET = 84;
+
+/**
+ * Danfos, BRT buses, cars, kekes, okadas and trucks on the district's real roads. They keep to their lane on
+ * the right, follow one-way streets the right way, queue, give way at junctions and turn from road to road;
+ * danfos pull in at the bus stop. The traffic stays on the streets around you.
+ */
+export function CityTraffic({ city, h, lagos, kekeColor, okada, playerPos, busy, lightsOn }: { city: CityRender; h: Hood; lagos: boolean; kekeColor: string; okada: boolean; playerPos: React.MutableRefObject<THREE.Vector3>; busy: number; lightsOn: boolean }) {
+  const net = useMemo(() => buildDriveNet(city.roads, h.bounds), [city, h]);
+  const fleet = useMemo(() => {
     const rnd = seeded(`ctraffic:${city.roads.length}`);
     const rider: Looks = { skin: 2, hair: 0, outfit: 1, accent: 2, glasses: false };
-    const roads = city.roads
-      .filter((r) => r.c === 'major' || r.c === 'minor')
-      .map((r) => ({ r, pts: pairs(r.p), len: lane(pairs(r.p)).len }))
-      .filter((x) => x.len > 70)
-      .sort((a, b) => b.len - a.len)
-      .slice(0, 18);
-    const out: { pts: P2[]; offset: number; speed: number; start: number; node: ReactNode }[] = [];
-    for (const { r, pts, len } of roads) {
-      const n = Math.max(2, Math.min(6, Math.round(len / 110)));
-      for (let k = 0; k < n; k++) {
-        const roll = rnd();
-        const major = r.c === 'major';
-        const node =
-          roll < 0.32 ? (lagos ? <Danfo /> : <Keke color={kekeColor} />)
-          : roll < 0.62 ? <Car color={CAR_COLOURS[Math.floor(rnd() * CAR_COLOURS.length)]} />
-          : roll < 0.74 ? <Keke color={kekeColor} />
-          : roll < 0.84 && okada ? <Okada rider={rider} />
-          : roll < 0.92 && major && lagos ? <Brt />
-          : major ? <Truck color={['#c2552d', '#2f63ad', '#1e8f5a'][Math.floor(rnd() * 3)]} />
-          : <Car color={CAR_COLOURS[Math.floor(rnd() * CAR_COLOURS.length)]} />;
-        out.push({ pts, offset: Math.min(r.w / 2 - 1, 1.6 + rnd() * (r.w / 4)), speed: 6 + rnd() * 6, start: rnd() * len * 2, node });
-      }
+    const colour = () => CAR_COLOURS[Math.floor(rnd() * CAR_COLOURS.length)];
+    const out: { spec: CarSpec; node: ReactNode; lamps: [number, number, number] }[] = [];
+    for (let k = 0; k < FLEET; k++) {
+      const roll = rnd();
+      if (roll < 0.3) out.push(lagos ? { spec: { len: 4.2, vmax: 8 + rnd() * 3, bus: true }, node: <Danfo />, lamps: [4.2, 1.7, 0.9] } : { spec: { len: 2.3, vmax: 6 + rnd() * 2, bus: true }, node: <Keke color={kekeColor} />, lamps: [2.2, 1.1, 0.7] });
+      else if (roll < 0.62) out.push({ spec: { len: 3.9, vmax: 10 + rnd() * 4 }, node: <Car color={colour()} />, lamps: [3.8, 1.5, 0.8] });
+      else if (roll < 0.74) out.push({ spec: { len: 2.3, vmax: 6 + rnd() * 2 }, node: <Keke color={kekeColor} />, lamps: [2.2, 1.1, 0.7] });
+      else if (roll < 0.84 && okada) out.push({ spec: { len: 1.7, vmax: 10 + rnd() * 4 }, node: <Okada rider={rider} />, lamps: [1.6, 0.2, 0.75] });
+      else if (roll < 0.9 && lagos) out.push({ spec: { len: 8.6, vmax: 9 }, node: <Brt />, lamps: [8.5, 2, 1] });
+      else if (roll < 0.96) out.push({ spec: { len: 5.8, vmax: 7 + rnd() * 1.5 }, node: <Truck color={['#c2552d', '#2f63ad', '#1e8f5a'][Math.floor(rnd() * 3)]} />, lamps: [5.4, 1.8, 1] });
+      else out.push({ spec: { len: 3.9, vmax: 10 + rnd() * 4 }, node: <Car color={colour()} />, lamps: [3.8, 1.5, 0.8] });
     }
     return out;
   }, [city, lagos, kekeColor, okada]);
+  const sim = useRef<Traffic | null>(null);
+  const refs = useRef<(THREE.Group | null)[]>([]);
+  const heading = useRef(new Float32Array(FLEET));
+  const last = useRef<P2>([0, 0]);
+  useLayoutEffect(() => {
+    sim.current = null;
+  }, [net, fleet, h]);
+  useFrame((_, frame) => {
+    const p = playerPos.current;
+    const me: P2 = [p.x, p.z];
+    // A fresh district, or you have just arrived somewhere far off: put the traffic on the streets around you.
+    if (!sim.current || Math.hypot(me[0] - last.current[0], me[1] - last.current[1]) > 150) {
+      const rnd = seeded(`cars:${city.roads.length}:${Math.round(me[0])}`);
+      sim.current = makeTraffic(net, fleet.map((f) => f.spec), rnd, findBusStop(net, h.busStop), me);
+      sim.current.cars.forEach((c, i) => (heading.current[i] = Math.atan2(-c.dz, c.dx)));
+    }
+    last.current = me;
+    const t = sim.current;
+    const dt = Math.min(frame, 0.1);
+    stepTraffic(t, dt, Math.round(FLEET * busy), me);
+    t.cars.forEach((c, i) => {
+      const g = refs.current[i];
+      if (!g) return;
+      const show = !c.parked && Math.abs(c.x - p.x) + Math.abs(c.z - p.z) < 240;
+      g.visible = show;
+      if (!show) return;
+      // Vehicles are built facing +x. Turn the body smoothly; snap after coming in somewhere new.
+      const want = Math.atan2(-c.dz, c.dx);
+      const jumped = Math.abs(g.position.x - c.x) + Math.abs(g.position.z - c.z) > 8;
+      let d = want - heading.current[i];
+      d = Math.atan2(Math.sin(d), Math.cos(d));
+      heading.current[i] = jumped ? want : heading.current[i] + d * Math.min(1, dt * 9);
+      g.position.set(c.x, 0.02, c.z);
+      g.rotation.y = heading.current[i];
+    });
+  });
   return (
     <group>
-      {list.map((v, i) => (
-        <RoadMover key={i} pts={v.pts} offset={v.offset} speed={v.speed} start={v.start} playerPos={playerPos}>
+      {fleet.map((v, i) => (
+        <group key={i} ref={(r) => void (refs.current[i] = r)} visible={false}>
           {v.node}
-        </RoadMover>
+          {lightsOn && <Lamps len={v.lamps[0]} w={v.lamps[1]} y={v.lamps[2]} />}
+        </group>
       ))}
     </group>
   );
 }
 
+const BROLLIES = ['#1f1d1a', '#2f63ad', '#b8352a', '#1e8f5a', '#f2b705', '#7b3fa0'];
+const GOODS = ['#f2b705', '#d23c22', '#fffaf0', '#1e8f5a', '#e0782a', '#7fb6d6'];
+
+/**
+ * The life of a Lagos street. Hawkers with trays on their heads work the edge of the main roads and the
+ * lines between the lanes near the bus stop; a traffic warden waves the traffic on at the nearest big
+ * junction; and in the rainy season puddles lie along the kerbs.
+ */
+export function CityStreetLife({ city, h, playerPos, rainy }: { city: CityRender; h: Hood; playerPos: React.MutableRefObject<THREE.Vector3>; rainy: boolean }) {
+  const hawkers = useMemo(() => {
+    const rnd = seeded(`hawk:${h.real?.name}`);
+    const [sx, sz] = h.busStop;
+    const roads = city.roads
+      .filter((r) => r.c === 'major' || r.c === 'minor')
+      .map((r) => ({ r, pts: pairs(r.p) }))
+      .filter(({ pts }) => lane(pts).len > 40 && pts.some((p) => Math.abs(p[0] - sx) + Math.abs(p[1] - sz) < 190));
+    if (!roads.length) return [];
+    return Array.from({ length: 12 }, (_, i) => {
+      const { r, pts } = roads[Math.floor(rnd() * roads.length)];
+      const offs = laneOffsets(r.w, !!r.o);
+      // One in three walks the line between two lanes, selling to the cars; the rest keep to the gutter.
+      const between = offs.length > 1 && i % 3 === 0;
+      const k = 1 + Math.floor(rnd() * (offs.length - 1));
+      return {
+        pts,
+        offset: between ? (offs[k - 1] + offs[k]) / 2 : (rnd() < 0.5 ? -1 : 1) * (r.w / 2 - 0.25),
+        speed: 0.8 + rnd() * 0.7,
+        start: rnd() * 300,
+        looks: { skin: Math.floor(rnd() * 5), hair: Math.floor(rnd() * 5), outfit: Math.floor(rnd() * 8), accent: Math.floor(rnd() * 8), glasses: false },
+        gender: (rnd() > 0.4 ? 'f' : 'm') as 'm' | 'f',
+        goods: GOODS[Math.floor(rnd() * GOODS.length)],
+      };
+    });
+  }, [city, h]);
+  // The warden stands on the corner of the big junction nearest the bus stop.
+  const warden = useMemo(() => {
+    const net = buildDriveNet(city.roads, h.bounds);
+    const [sx, sz] = h.busStop;
+    let best: { x: number; z: number; rot: number; d: number } | null = null;
+    for (const n of net.nodes) {
+      if (!n.junction || !n.out.length) continue;
+      const d = Math.hypot(n.x - sx, n.z - sz);
+      if (d < 25 || d > 260 || (best && d >= best.d)) continue;
+      const e = net.edges[n.out[0]];
+      const reach = e.w / 2 + 1.6;
+      // Out along the road and then off to its right: the corner, clear of the lanes.
+      best = { x: n.x + e.d0[0] * reach - e.d0[1] * reach, z: n.z + e.d0[1] * reach + e.d0[0] * reach, rot: Math.atan2(n.x - (n.x + e.d0[0] * reach - e.d0[1] * reach), n.z - (n.z + e.d0[1] * reach + e.d0[0] * reach)), d };
+    }
+    return best;
+  }, [city, h]);
+  const puddles = useMemo(() => {
+    const rnd = seeded(`puddle:${h.real?.name}`);
+    const out: Inst[] = [];
+    for (const r of city.roads) {
+      const pts = pairs(r.p);
+      for (let i = 1; i < pts.length; i++) {
+        if (rnd() > 0.3) continue;
+        const [a, c] = [pts[i - 1], pts[i]];
+        const L = Math.hypot(c[0] - a[0], c[1] - a[1]);
+        if (L < 6) continue;
+        const t = 0.15 + rnd() * 0.7;
+        const side = (rnd() < 0.5 ? -1 : 1) * (r.w / 2 - 0.4 - rnd() * 0.8);
+        out.push({ x: a[0] + (c[0] - a[0]) * t - ((c[1] - a[1]) / L) * side, z: a[1] + (c[1] - a[1]) * t + ((c[0] - a[0]) / L) * side, w: 1 + rnd() * 1.6, d: 0.6 + rnd() * 0.9, h: 0, rot: Math.atan2(-(c[1] - a[1]), c[0] - a[0]), wall: '#56707e', roof: '', flat: true });
+        if (out.length >= 600) return out;
+      }
+    }
+    return out;
+  }, [city, h]);
+  return (
+    <group>
+      {hawkers.map((p, i) => (
+        <RoadMover key={i} pts={p.pts} offset={p.offset} speed={p.speed} start={p.start} playerPos={playerPos}>
+          <Person3D looks={p.looks} gender={p.gender} pose="walk" speed={p.speed / 1.4} />
+          <HeadTray goods={p.goods} />
+        </RoadMover>
+      ))}
+      {warden && (
+        <group position={[warden.x, 0.16, warden.z]} rotation={[0, warden.rot, 0]}>
+          <Person3D looks={{ skin: 3, hair: 0, outfit: 0, accent: 0, glasses: false }} gender="m" pose="wave" />
+          {/* The yellow shirt and maroon cap of a Lagos traffic warden. */}
+          <mesh position={[0, 1.2, 0]} material={mat('#e9c84a')}>
+            <boxGeometry args={[0.56, 0.66, 0.34]} />
+          </mesh>
+          <mesh position={[0, 1.97, 0.02]} material={mat('#7b1f3a')}>
+            <cylinderGeometry args={[0.2, 0.22, 0.12, 10]} />
+          </mesh>
+        </group>
+      )}
+      {rainy && <Instances items={puddles} geo={PUDDLE} place={placePuddle} colour={wallOf} cast={false} material={PUDDLE_MATERIAL} />}
+    </group>
+  );
+}
+
+const PUDDLE = new THREE.CircleGeometry(1, 10);
+PUDDLE.rotateX(-Math.PI / 2);
+const PUDDLE_MATERIAL = new THREE.MeshStandardMaterial({ roughness: 0.08, metalness: 0.5, transparent: true, opacity: 0.75 });
+const placePuddle = (it: Inst, o: THREE.Object3D) => {
+  o.position.set(it.x, 0.036, it.z);
+  o.rotation.y = it.rot;
+  o.scale.set(it.w, 1, it.d);
+};
+
 /** People walking the pavements of the streets around the bus stop. */
-export function CityPedestrians({ city, h, playerPos, count = 26 }: { city: CityRender; h: Hood; playerPos: React.MutableRefObject<THREE.Vector3>; count?: number }) {
+export function CityPedestrians({ city, h, playerPos, rainy, count = 26 }: { city: CityRender; h: Hood; playerPos: React.MutableRefObject<THREE.Vector3>; rainy?: boolean; count?: number }) {
   const people = useMemo(() => {
     const rnd = seeded(`cped:${h.real?.name}`);
     const [sx, sz] = h.busStop;
@@ -617,47 +815,19 @@ export function CityPedestrians({ city, h, playerPos, count = 26 }: { city: City
         start: rnd() * 400,
         looks: { skin: Math.floor(rnd() * 5), hair: Math.floor(rnd() * 5), outfit: Math.floor(rnd() * 8), accent: Math.floor(rnd() * 8), glasses: rnd() > 0.85 },
         gender: (rnd() > 0.5 ? 'm' : 'f') as 'm' | 'f',
+        // Most people have an umbrella when it rains; some just walk fast.
+        brolly: rnd() < 0.7 ? BROLLIES[Math.floor(rnd() * BROLLIES.length)] : null,
       };
     });
   }, [city, h, count]);
   return (
     <group>
       {people.map((p, i) => (
-        <RoadMover key={i} pts={p.pts} offset={p.offset} speed={p.speed} start={p.start} playerPos={playerPos} walker>
+        <RoadMover key={i} pts={p.pts} offset={p.offset} speed={p.speed} start={p.start} playerPos={playerPos}>
           <Person3D looks={p.looks} gender={p.gender} pose="walk" speed={p.speed / 1.4} />
+          {rainy && p.brolly && <Umbrella color={p.brolly} />}
         </RoadMover>
       ))}
-    </group>
-  );
-}
-
-/** A danfo that pulls in at the bus stop on its real road, waits for passengers, then goes. */
-export function CityStopDanfo({ h, lagos, kekeColor }: { h: Hood; lagos: boolean; kekeColor: string }) {
-  const ref = useRef<THREE.Group>(null);
-  const rot = h.busRot;
-  // The shelter's open side faces the road: from the road towards the stop is (sin, cos) of its rotation.
-  const [nx, nz] = [Math.sin(rot), Math.cos(rot)];
-  const [tx, tz] = [Math.cos(rot), -Math.sin(rot)];
-  const [rx, rz] = h.real?.road ?? [h.busStop[0], h.busStop[1] - 4];
-  const kerb = Math.max(1.6, (h.real?.span ?? 15) / 2 - PAV - 1.4);
-  const s = useRef({ x: -70, v: 10, wait: 0 });
-  useFrame((_, dt) => {
-    const st = s.current;
-    const left = -st.x;
-    if (st.wait > 0) {
-      st.wait -= dt;
-      st.v = 0;
-    } else if (left > 0 && left < 16) {
-      st.v = Math.max(1.2, left * 0.7);
-      if (left < 0.15) st.wait = 5;
-    } else st.v = Math.min(10, st.v + dt * 5);
-    st.x += st.v * dt;
-    if (st.x > 70) st.x = -70;
-    if (ref.current) ref.current.position.set(rx + nx * kerb + tx * st.x, 0, rz + nz * kerb + tz * st.x);
-  });
-  return (
-    <group ref={ref} rotation={[0, rot, 0]}>
-      {lagos ? <Danfo /> : <Keke color={kekeColor} />}
     </group>
   );
 }
@@ -987,13 +1157,13 @@ export function PlaceModel({ kind, w, d, style, lit, sign }: { kind: string; w: 
 }
 
 /** Everything static in a real district: ground, water, roads, buildings, trees, lamps and street names. */
-export function CityScene({ city, h, style, tar, lightsOn, playerPos, onClick }: { city: CityRender; h: Hood; style: SceneStyle; tar: boolean; lightsOn: boolean; playerPos: React.MutableRefObject<THREE.Vector3>; onClick: (e: never) => void }) {
+export function CityScene({ city, h, style, tar, lightsOn, night, playerPos, onClick }: { city: CityRender; h: Hood; style: SceneStyle; tar: boolean; lightsOn: boolean; night: boolean; playerPos: React.MutableRefObject<THREE.Vector3>; onClick: (e: never) => void }) {
   const lamps = useMemo(() => cityLamps(city), [city]);
   return (
     <group>
       <CityGround city={city} h={h} style={style} onClick={onClick} />
       <CityRoads city={city} tar={tar} onClick={onClick} />
-      <CityBlocks city={city} style={style} />
+      <CityBlocks city={city} style={style} glow={lightsOn ? 0.5 : night ? 0.1 : 0} />
       <CityTrees city={city} h={h} style={style} />
       <CityLamps lamps={lamps} lightsOn={lightsOn} playerPos={playerPos} />
       <StreetNames city={city} playerPos={playerPos} />

@@ -1,3 +1,4 @@
+import { FURNISHINGS, ageOf, datingOf, kidsOf, owns, spouseOf } from '../engine/family';
 import { useState } from 'react';
 import { NIGERIA, NIGERIA_H, NIGERIA_W, STATE_GEO, STATE_H, STATE_W } from '../data/geo';
 import { ROLE_NAMES } from '../data/people';
@@ -52,6 +53,20 @@ export function LifePanel({ g }: { g: Game }) {
           </div>
           {p.office && <span className="chip" style={{ marginTop: 4, background: 'var(--danfo)' }}>{officeTitle(p.office)}</span>}
         </div>
+      </div>
+      <div className="muted" style={{ fontSize: 13 }}>
+        🎂 {ageOf(g)} years old ·{' '}
+        {spouseOf(g) ? `💍 married to ${spouseOf(g)!.name}` : datingOf(g) ? `💐 seeing ${datingOf(g)!.name}` : 'single'}
+        {kidsOf(g) ? ` · 👶 ${kidsOf(g)} child${kidsOf(g) > 1 ? 'ren' : ''}` : ''}
+        {FURNISHINGS.some((f) => owns(g, f.id)) && (
+          <>
+            <br />
+            🏠 At home:{' '}
+            {FURNISHINGS.filter((f) => owns(g, f.id))
+              .map((f) => f.name.toLowerCase())
+              .join(', ')}
+          </>
+        )}
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 10 }}>
         <Meter label="Health" value={p.health} color="var(--good)" />

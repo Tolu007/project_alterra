@@ -7,6 +7,7 @@ import { hood } from './map';
 import { absNow, bind, eachSeat, seatOf, unbind } from './seats';
 import { addSeat, newSharedWorld, type NewLife } from './setup';
 import { applyAction, endWeekShared, goToBed, rideFare, settleInbox } from './sim';
+import { settleSocial } from './social';
 import { DAY_END, DAY_START, DAYS_PER_WEEK, type Game } from './types';
 
 // A shared world runs on a real-time clock that nobody can pause. The server calls tickWorld before every
@@ -106,6 +107,8 @@ function endDayShared(g: Game, awayBefore: number) {
     endWeekShared(g);
     g.week++;
     g.day = 0;
+    // Wages between players are paid and loans fall due.
+    settleSocial(g, g.shared?.realMs ?? Date.now());
   }
 }
 
@@ -176,12 +179,22 @@ export type Intent =
   | { kind: 'ride' }
   | { kind: 'talk'; person: number }
   | { kind: 'hire'; business: number; person: number }
+  | { kind: 'court'; person: number; step: 'ask' | 'propose' }
   | { kind: 'report' }
   | { kind: 'event'; choice: number }
   | { kind: 'eventDone' }
   | { kind: 'govern'; plan: unknown }
   | { kind: 'electionDone' }
-  | { kind: 'paperSeen' };
+  | { kind: 'paperSeen' }
+  // Between players (see social.ts).
+  | { kind: 'chat'; text: string; to?: number | null }
+  | { kind: 'pay'; to: number; amount: number }
+  | { kind: 'offer'; to: number; offer: { type: string; business?: number; amount: number; repay?: number; weeks?: number } }
+  | { kind: 'answer'; offer: number; accept: boolean }
+  | { kind: 'withdraw'; offer: number }
+  | { kind: 'endJob'; business: number; worker: number }
+  | { kind: 'repay'; to: number; amount: number }
+  | { kind: 'endorse'; to: number };
 
 /** Is this a place in the bound player's current LGA (or one of its plots)? */
 export function validPlace(g: Game, place: PlaceId, lot: number | null): boolean {

@@ -390,11 +390,34 @@
 
 .toast3d,
 .busy-pill,
-.weather-chip {
+.chip-row {
   position: absolute;
   left: 50%;
   transform: translateX(-50%);
   z-index: 6;
+}
+
+/* What is going on: the season, and news from the wider world. */
+.chip-row {
+  top: 70px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 5px;
+  max-width: calc(100% - 520px);
+  min-width: 200px;
+}
+
+.world-chip {
+  cursor: help;
+}
+
+.world-chip.bad {
+  background: rgba(150, 40, 28, 0.88);
+}
+
+.world-chip.good {
+  background: rgba(24, 110, 70, 0.88);
 }
 
 .toast3d {
@@ -425,7 +448,6 @@
 }
 
 .weather-chip {
-  top: 70px;
   background: rgba(31, 29, 26, 0.75);
   color: var(--cream);
   border-radius: 999px;
@@ -926,6 +948,157 @@
   width: 220px;
 }
 
+.city-map svg {
+  cursor: crosshair;
+}
+
+.mm-pin {
+  cursor: pointer;
+}
+
+.mm-pin:hover circle {
+  stroke: #d23c22;
+}
+
+.mm-pin text {
+  pointer-events: none;
+}
+
+.mm-street {
+  font-family: 'Figtree', system-ui, sans-serif;
+  font-weight: 700;
+  fill: #6b6558;
+  stroke: #ffffff;
+  paint-order: stroke;
+  pointer-events: none;
+}
+
+.map-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 4px 30px 7px;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+.map-head b {
+  font-family: var(--display);
+  font-size: 18px;
+  color: var(--ink);
+}
+
+.map-key {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  padding: 7px 6px 3px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ink-2);
+}
+
+.map-key span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.map-key i {
+  display: inline-block;
+  width: 14px;
+  height: 10px;
+  border-radius: 3px;
+}
+
+.map-key .k-me {
+  width: 10px;
+  border-radius: 50%;
+  background: #d23c22;
+}
+
+.map-key .k-way {
+  height: 4px;
+  background: #2a6df4;
+}
+
+.map-key .k-lot {
+  border: 1.5px dashed #c99400;
+  background: rgba(242, 183, 5, 0.22);
+}
+
+.map-key .k-own {
+  width: 10px;
+  border-radius: 50%;
+  background: #f2b705;
+  border: 1.5px solid var(--ink);
+}
+
+.map-key .k-mark {
+  width: 10px;
+  border-radius: 50%;
+  background: #8a5bb5;
+}
+
+.map-key .k-main {
+  height: 6px;
+  background: #fbdc7e;
+  border: 1px solid #c9a23a;
+}
+
+/* Where you are heading, and how far is left. */
+.route-chip {
+  position: absolute;
+  left: 50%;
+  bottom: 30px;
+  transform: translateX(-50%);
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  max-width: calc(100% - 24px);
+  background: var(--paper);
+  border: var(--b);
+  border-radius: 999px;
+  padding: 6px 6px 6px 14px;
+  font-size: 14px;
+  box-shadow: 3px 3px 0 var(--ink);
+  white-space: nowrap;
+}
+
+.route-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.route-dot {
+  width: 11px;
+  height: 11px;
+  flex: none;
+  border-radius: 50%;
+  background: #2a6df4;
+  box-shadow: 0 0 0 3px rgba(42, 109, 244, 0.25);
+}
+
+.route-chip button {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 2px solid var(--ink);
+  background: var(--sand);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+@media (max-width: 700px) {
+  .route-chip {
+    bottom: 112px;
+    font-size: 13px;
+  }
+}
+
 .city-map.whole {
   top: 50%;
   right: 50%;
@@ -935,7 +1108,7 @@
 }
 
 .city-map svg {
-  aspect-ratio: 260 / 198;
+  aspect-ratio: 100 / 84;
 }
 
 .city-map.whole svg {
@@ -958,10 +1131,10 @@
 }
 
 .mm-label {
-  font: 800 11px 'Figtree', system-ui, sans-serif;
+  font-family: 'Figtree', system-ui, sans-serif;
+  font-weight: 800;
   fill: #1f1d1a;
   stroke: #fffaf0;
-  stroke-width: 3px;
   paint-order: stroke;
   pointer-events: none;
 }
@@ -1048,7 +1221,16 @@
 }
 
 .trip-card .travel-map {
-  max-height: 58vh;
+  max-height: 30vh;
+}
+
+/* The view from the road while you travel. */
+.trip-ride {
+  height: min(250px, 32vh);
+  border: 2px solid var(--ink);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--sky);
 }
 
 .trip-foot {
@@ -1072,4 +1254,393 @@
 .travel-map .mm-hit:hover circle:not(.hit-pad),
 .travel-map path.mm-hit:hover {
   fill: #f2b705;
+}
+
+/* The getting-started list, under the clock. */
+.guide {
+  position: absolute;
+  top: 228px;
+  left: 12px;
+  z-index: 5;
+  width: 232px;
+  background: rgba(255, 250, 240, 0.96);
+  border: var(--b);
+  border-radius: 14px;
+  padding: 8px 10px 9px;
+  box-shadow: 3px 3px 0 var(--ink);
+  font-size: 13px;
+}
+
+.guide-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.guide-fold {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  border: 0;
+  background: none;
+  padding: 0;
+  font-size: 14px;
+  font-family: var(--display);
+}
+
+.guide-count {
+  font: 700 11px var(--mono);
+  color: var(--ink-3);
+}
+
+.guide-skip {
+  border: 0;
+  background: none;
+  padding: 2px 0;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ink-3);
+  text-decoration: underline;
+}
+
+.guide-list {
+  list-style: none;
+  margin: 7px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.guide-list li {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--ink-3);
+}
+
+.guide-list i {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  border: 2px solid var(--ink-3);
+  border-radius: 5px;
+  font-style: normal;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 11px;
+  text-align: center;
+}
+
+.guide-list li.ok {
+  text-decoration: line-through;
+}
+
+.guide-list li.ok i {
+  background: var(--keke);
+  border-color: var(--keke);
+  color: #fff;
+}
+
+.guide-list li.now {
+  color: var(--ink);
+  font-weight: 800;
+}
+
+.guide-list li.now i {
+  border-color: var(--ink);
+  background: var(--danfo-2);
+}
+
+.guide-hint {
+  margin: 7px 0 0;
+  padding-top: 7px;
+  border-top: 1.5px dashed var(--line);
+  line-height: 1.35;
+  color: var(--ink-2);
+}
+
+.guide-done .guide-hint {
+  border: 0;
+  padding: 0;
+  margin: 4px 0 8px;
+}
+
+/* Out of the way of the docked action menu's neighbours on small screens: one line under the clock. */
+@media (max-width: 720px) {
+  .guide {
+    width: min(232px, calc(100% - 24px));
+    font-size: 12.5px;
+  }
+
+  .guide-list {
+    display: none;
+  }
+}
+
+.sound-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 2px solid var(--ink);
+  background: var(--paper);
+  border-radius: 999px;
+  padding: 2px 10px 2px 7px;
+  font-size: 13px;
+  font-weight: 700;
+  box-shadow: 2px 2px 0 var(--ink);
+}
+
+.sound-btn span {
+  font-size: 11.5px;
+}
+
+@media (max-width: 720px) {
+  .sound-btn span {
+    display: none;
+  }
+  .sound-btn {
+    padding: 2px 7px;
+  }
+}
+
+/* Other players: chat, deals and the leaderboard. */
+.social {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  z-index: 11;
+  width: min(430px, calc(100% - 24px));
+  max-height: min(560px, calc(100% - 100px));
+  display: flex;
+  flex-direction: column;
+  background: var(--paper);
+  border: var(--b);
+  border-radius: 18px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+  font-size: 14px;
+}
+
+.social-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 8px 6px 10px;
+  border-bottom: 2px solid var(--ink);
+  background: var(--sand);
+}
+
+.social-tabs {
+  display: flex;
+  flex: 1;
+  gap: 4px;
+  overflow-x: auto;
+}
+
+.social-tabs button {
+  border: 2px solid var(--ink);
+  background: var(--paper);
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 12.5px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.social-tabs button.on {
+  background: var(--danfo);
+}
+
+.social-body {
+  flex: 1;
+  min-height: 120px;
+  overflow-y: auto;
+  padding: 10px;
+  display: grid;
+  gap: 6px;
+  align-content: start;
+}
+
+.chat-log {
+  min-height: 170px;
+  gap: 4px;
+}
+
+.chat-line {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  max-width: 92%;
+  background: var(--sand);
+  border-radius: 12px 12px 12px 3px;
+  padding: 5px 9px;
+  justify-self: start;
+}
+
+.chat-line.me {
+  justify-self: end;
+  background: var(--danfo-2);
+  border-radius: 12px 12px 3px 12px;
+}
+
+.chat-line.sys {
+  justify-self: center;
+  background: none;
+  border: 1.5px dashed var(--line);
+  color: var(--ink-2);
+  font-size: 12.5px;
+  border-radius: 10px;
+}
+
+.chat-who {
+  border: 0;
+  background: none;
+  padding: 0;
+  font-weight: 800;
+  color: var(--chart);
+  flex: none;
+}
+
+.chat-text {
+  overflow-wrap: anywhere;
+}
+
+.chat-time {
+  flex: none;
+  font: 600 10px var(--mono);
+  color: var(--ink-3);
+}
+
+.chat-form,
+.peer-form,
+.peer-bar,
+.peer-acts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  border-top: 1.5px solid var(--line);
+}
+
+.peer-bar {
+  border-top: 0;
+  border-bottom: 1.5px solid var(--line);
+}
+
+.chat-form input {
+  flex: 1;
+  min-width: 0;
+}
+
+.chat-form input,
+.peer-form input,
+.peer-form select {
+  border: 2px solid var(--ink);
+  border-radius: 10px;
+  padding: 6px 9px;
+  font: inherit;
+  background: #fff;
+}
+
+.peer-form select {
+  width: 100%;
+}
+
+.peer-form label {
+  display: grid;
+  gap: 2px;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--ink-2);
+}
+
+.peer-form input {
+  width: 118px;
+}
+
+.peer-acts .chip.on {
+  background: var(--danfo);
+}
+
+.player-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  border: 2px solid var(--ink);
+  border-radius: 12px;
+  background: #fff;
+  padding: 7px 10px;
+}
+
+.player-row .dot {
+  width: 9px;
+  height: 9px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--ink-3);
+}
+
+.player-row .dot.on {
+  background: var(--keke);
+}
+
+.deal {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border: 2px solid var(--ink);
+  border-radius: 12px;
+  background: #fff;
+  padding: 7px 10px;
+}
+
+.deal-acts {
+  display: flex;
+  gap: 5px;
+  flex: none;
+}
+
+.board {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.board th {
+  text-align: left;
+  font: 700 10.5px var(--mono);
+  text-transform: uppercase;
+  color: var(--ink-3);
+  padding: 2px 6px 5px;
+}
+
+.board td {
+  padding: 6px;
+  border-top: 1.5px solid var(--line);
+  vertical-align: top;
+}
+
+.board tr.me td {
+  background: var(--danfo-2);
+}
+
+.social-note {
+  padding: 6px 10px;
+  font-size: 12.5px;
+  font-weight: 700;
+  background: #dff3e6;
+  border-top: 1.5px solid var(--line);
+}
+
+.social-note.bad {
+  background: #fbe0db;
+}
+
+.round-btn {
+  position: relative;
 }

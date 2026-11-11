@@ -1,8 +1,10 @@
+import { court, familyWeek } from './family';
 import type { FedPolicy, LgaPolicy, StatePolicy } from '../data/politics';
 import type { PlaceId } from '../data/trades';
 import { LGAS, STATES, lgaById, type StateId } from '../data/world';
 import { isMonthEnd, isYearEnd } from './calendar';
 import { updateCohorts, updateMacro, updatePrices, updateRents, updateSatisfaction } from './economy';
+import { stepShocks } from './shocks';
 import { weeklyElections } from './elections';
 import { eventById, scheduleEvents, type Choice } from './events';
 import { accrueSubsidy, demolishMarket, govById, levelOf, monthlyGovernment, weeklyGovernment } from './government';
@@ -163,6 +165,13 @@ export function talkTo(g0: Game, person: number): { game: Game; line: string } {
   return { game: g, line };
 }
 
+/** Asks someone out, or proposes to them (see family.ts). */
+export function courtPerson(g0: Game, person: number, step: 'ask' | 'propose'): { game: Game; ok: boolean; text: string } {
+  const g = clone(g0);
+  const r = court(g, person, step);
+  return { game: r.ok ? g : g0, ...r };
+}
+
 /** Fills the rest of the week with routine: eat, wait for work to open, work, eat again, sleep. */
 export function routineWeek(g0: Game): Game {
   if (g0.phase !== 'day') return g0;
@@ -252,6 +261,8 @@ function endWeek(g: Game) {
 
   for (const s of STATES) delete g.wflags[`strike:${s.id}`];
   accrueSubsidy(g);
+  // News from abroad comes first: it moves crude, and crude moves everything else this week.
+  for (const n of stepShocks(g)) say(n.text, n.tone, 'world', undefined, 'economy', n.weight);
   updateMacro(g);
   updatePrices(g);
   updateCohorts(g);
@@ -261,6 +272,7 @@ function endWeek(g: Game) {
   settleBusinesses(g);
   eachSeat(g, (s) => {
     for (const line of weeklyLife(g)) personal(s.id, line);
+    for (const line of familyWeek(g)) personal(s.id, line);
   });
   headlines.push(...npcWeek(g), ...cultureNews(g));
 

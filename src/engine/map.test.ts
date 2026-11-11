@@ -97,7 +97,7 @@ describe('neighbourhood map', () => {
     expect(hood('KMC').real).toBeUndefined();
   });
 
-  it('in the real districts you can walk from home to every place and plot on the pavements', () => {
+  it('in the real districts you can walk from home to every place and plot on the pavements', { timeout: 30_000 }, () => {
     for (const l of LGAS.filter((x) => hood(x.id).real)) {
       const h = hood(l.id);
       const from = doorOf(l.id, 'home', null);

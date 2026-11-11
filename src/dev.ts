@@ -1,5 +1,6 @@
 // Dev-only helpers, loaded from main.tsx behind import.meta.env.DEV. Not in production builds.
 import { playWeeks } from './engine/autoplay';
+import { SHOCKS, startShock } from './engine/shocks';
 import { loadGame, saveGame } from './ui/save';
 
 export function install() {
@@ -9,6 +10,16 @@ export function install() {
       const g = loadGame();
       if (!g) return 'no saved game';
       saveGame(playWeeks(g, weeks));
+      location.reload();
+      return 'ok';
+    },
+    /** Starts a world event now, e.g. __nh.shock('mideast-war'); with no id, lists them. */
+    shock(id?: string, weeks?: number) {
+      if (!id) return SHOCKS.map((s) => s.id).join(', ');
+      const g = loadGame();
+      if (!g) return 'no saved game';
+      if (!startShock(g, id, weeks)) return 'no such event';
+      saveGame(g);
       location.reload();
       return 'ok';
     },

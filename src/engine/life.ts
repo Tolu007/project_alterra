@@ -1,3 +1,4 @@
+import { familyAct, homeExtras } from './family';
 import { PARTIES, partyById, type Level, type PartyId } from '../data/politics';
 import { PLACES, TRADES, tradeById, type PerkId, type PlaceId, type Skill } from '../data/trades';
 import { lgaById, stateById, type TradeId } from '../data/world';
@@ -267,6 +268,8 @@ export function actionsAt(g: Game, place: PlaceId): DayAction[] {
       out.push({ id: 'cook', label: 'Cook and eat at home', detail: 'Rice and stew from the pot. Hunger +45.', cost: Math.round(1_500 * foodIdx(g)), energy: 0, tone: 'food' });
       if (!g.shared) out.push({ id: 'nap', label: 'Take a nap', detail: 'An hour and a half on the mat. Energy +20.', energy: 20, tone: 'rest' });
       out.push({ id: 'family', label: 'Time with family', detail: 'Social and mood up; your people feel remembered.', cost: Math.round(3_000 * P(g)), energy: 5, tone: 'rest' });
+      // Someone to take out, and things for the house (see family.ts).
+      out.push(...homeExtras(g));
       break;
     case 'market':
       out.push({ id: 'eat', label: 'Eat at a mama put', detail: 'Hot food and gist. Hunger +55, a little social.', cost: Math.round(2_800 * foodIdx(g)), energy: 0, tone: 'food' });
@@ -683,6 +686,8 @@ export function act(g: Game, id: string): string {
     p.social = clamp(p.social + 5, 0, 100);
     return pick(g, ['Mama put gave you extra meat. You are her favourite now.', 'Amala, ewedu, gbegiri. The gist at the table was even hotter.', 'Rice and dodo, plus the latest gossip about the chairman.']);
   }
+  const homeLife = familyAct(g, id);
+  if (homeLife !== null) return homeLife;
   if (id === 'family') {
     p.happiness = clamp(p.happiness + 7, 0, 100);
     p.social = clamp(p.social + 18, 0, 100);

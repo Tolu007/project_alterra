@@ -305,10 +305,10 @@ function snap(p: Pt, _h: Hood): { pt: Pt; axis: 'h' | 'v' } {
 
 const len = (pts: Pt[]) => pts.slice(1).reduce((s, p, i) => s + Math.abs(p[0] - pts[i][0]) + Math.abs(p[1] - pts[i][1]), 0);
 
-/** A path that follows the street grid from one point to another. */
-export function route(lga: string, from: Pt, to: Pt): Pt[] {
+/** A path that follows the streets from one point to another: on foot, or in the traffic lane when you `ride`. */
+export function route(lga: string, from: Pt, to: Pt, ride = false): Pt[] {
   const h = hood(lga);
-  if (h.real) return streetRoute(lga, from, to);
+  if (h.real) return streetRoute(lga, from, to, ride);
   const a = snap(from, h);
   const b = snap(to, h);
   const sameLine = (a.axis === 'h' && b.axis === 'h' && a.pt[1] === b.pt[1]) || (a.axis === 'v' && b.axis === 'v' && a.pt[0] === b.pt[0]);

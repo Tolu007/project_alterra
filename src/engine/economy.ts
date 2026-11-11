@@ -1,4 +1,5 @@
 import type { Level } from '../data/politics';
+import { shockEffects } from './shocks';
 import { tradeById, TRADES } from '../data/trades';
 import { LGAS, STATES, lgaById, stateById, type StateId, type TradeId } from '../data/world';
 import { chance, gauss } from './rng';
@@ -37,17 +38,21 @@ export function gridHours(g: Game, state: StateId): number {
 export function updateMacro(g: Game) {
   const m = g.macro;
   const fp = g.fed.policy;
+  // What is going on in the world (see shocks.ts): crude is pulled towards a new level, and quickly.
+  const world = shockEffects(g);
+  const pull = world.oil === 1 ? 0.06 : 0.3;
 
-  m.oilPrice = clamp(m.oilPrice + 0.06 * (72 - m.oilPrice) + gauss(g) * 1.8, 35, 130);
+  m.oilPrice = clamp(m.oilPrice + pull * (72 * world.oil - m.oilPrice) + gauss(g) * 1.8, 30, 160);
   const riversSecurity = 0.5 * g.fedInfra.security + 0.5 * g.stateInfra.RI.security;
-  const target = 1.9 * (0.7 + (0.3 * riversSecurity) / 100);
+  const target = 1.9 * (0.7 + (0.3 * riversSecurity) / 100) * world.output;
   m.oilOutput += 0.12 * (target - m.oilOutput);
 
   // Dollar supply and demand, $bn a week.
   const supply = (m.oilOutput * 7 * m.oilPrice * 0.55) / 1000 + 0.38 + 0.12 * m.confidence * (fp.mpr / 20);
   const demandIdx = nationalDemand(g);
-  const fuelImports = 0.2 * (fp.subsidy ? 1.3 : 1);
-  const demand = 0.55 * demandIdx * Math.pow(1500 / m.fxParallel, 0.6) + fuelImports + 0.15 * (1 - m.confidence) + 0.05 * (m.inflation / 0.2);
+  // The fuel import bill moves with crude; dearer freight and grain add to the dollars the country needs.
+  const fuelImports = 0.2 * (fp.subsidy ? 1.3 : 1) * Math.pow(m.oilPrice / 72, 0.6);
+  const demand = 0.55 * demandIdx * Math.pow(1500 / m.fxParallel, 0.6) + fuelImports + world.imports + 0.15 * (1 - m.confidence) + 0.05 * (m.inflation / 0.2);
 
   const before = m.fxParallel;
   if (fp.fx === 'float') {
@@ -68,7 +73,7 @@ export function updateMacro(g: Game) {
   const fxMove = Math.abs(Math.log(m.fxParallel / before));
   const debtLoad = g.fed.ledger.debtService / Math.max(1, g.fed.ledger.revenue);
   m.confidence = clamp(
-    m.confidence + 0.01 * (0.6 - m.confidence) - 0.6 * fxMove - 0.002 * Math.max(0, m.inflation - 0.2) * 10 - 0.003 * Math.max(0, debtLoad - 0.8) * 10 + (fp.fx === 'peg' ? -0.002 : 0.001),
+    m.confidence + 0.01 * (0.6 - m.confidence) - 0.6 * fxMove - 0.002 * Math.max(0, m.inflation - 0.2) * 10 - 0.003 * Math.max(0, debtLoad - 0.8) * 10 + (fp.fx === 'peg' ? -0.002 : 0.001) + world.confidence,
     0.05,
     1,
   );
@@ -146,13 +151,15 @@ export function updatePrices(g: Game, first = false) {
 
   for (const st of STATES) {
     const pr = g.prices[st.id];
-    const landing = m.fxParallel * 0.55 + 120 * Math.sqrt(P);
+    // What a litre costs to land: refined fuel is bought in dollars at a price that follows crude.
+    const crude = Math.pow(m.oilPrice / 72, 0.55);
+    const landing = m.fxParallel * 0.55 * crude + 120 * Math.sqrt(P);
     const pump = fp.subsidy ? fp.subsidyPrice : landing;
     const gapShare = fp.subsidy ? (landing - pump) / landing : 0;
     // A deep subsidy gap means marketers hoard or smuggle; queues come and go.
     pr.scarcity = !first && fp.subsidy && gapShare > 0.3 && chance(g, Math.min(0.8, (gapShare - 0.3) * 2.5));
     pr.petrol = pump * st.fuelAdj * (pr.scarcity ? 1.4 : 1);
-    pr.diesel = (m.fxParallel * 0.68 + 150 * Math.sqrt(P)) * st.fuelAdj;
+    pr.diesel = (m.fxParallel * 0.68 * crude + 150 * Math.sqrt(P)) * st.fuelAdj;
     pr.grid = gridHours(g, st.id);
 
     const tariff = fp.tariff === 'cost' ? 210 * Math.pow(P, 0.6) : 90 * Math.pow(P, 0.3);
@@ -166,7 +173,8 @@ export function updatePrices(g: Game, first = false) {
       Math.pow(m.fxParallel / 1500, 0.22) *
       Math.pow(pr.petrol / (945 * st.fuelAdj), 0.1) *
       (1 + (0.25 * (50 - roads)) / 50) *
-      ban /
+      ban *
+      (first ? 1 : shockEffects(g).food) /
       (0.75 + 0.25 * supply);
     if (first) g.ref.food[st.id] = pr.food;
     pr.food = (pr.food / g.ref.food[st.id]) * st.foodAdj;

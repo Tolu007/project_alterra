@@ -411,6 +411,8 @@ export interface Game {
   humans: number[];
   /** Other players, for drawing them in the world (only in what the server sends you). */
   others?: PublicSeat[];
+  /** What players do with each other: chat, offers, jobs, loans (see social.ts). The server sends you only your part. */
+  social?: import('./social').Social;
   /** Flags about the world rather than any one player. */
   wflags: Record<string, number>;
   /** Shared worlds run on a real-time clock: this many game minutes per real minute, from this real moment. */

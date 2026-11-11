@@ -336,8 +336,15 @@ function buildDistrict(id, d) {
   const roads = [];
   for (const wy of ways) {
     const [cls, width] = CLASS[wy.tags.highway];
+    // One-way streets (each side of a dual carriageway, ramps, roundabouts) are stored in their direction of travel.
+    const back = wy.tags.oneway === '-1' || wy.tags.oneway === 'reverse';
+    const oneway = back || wy.tags.oneway === 'yes' || wy.tags.oneway === '1' || wy.tags.oneway === 'true' || ((wy.tags.highway === 'motorway' || wy.tags.junction === 'roundabout' || wy.tags.junction === 'circular') && wy.tags.oneway !== 'no');
     const pts = wy.geometry.map((g) => P(g.lat, g.lon));
     const keep = wy.nodes.map((nd) => (uses.get(nd) ?? 0) >= 2);
+    if (back) {
+      pts.reverse();
+      keep.reverse();
+    }
     const idx = simplify(pts, keep, 0.8);
     const simple = idx.map((i) => pts[i]);
     for (const piece of clipLine(simple, box)) {
@@ -345,7 +352,7 @@ function buildDistrict(id, d) {
       if (len < 3) continue;
       // Drop the little dead ends that make the map noisy.
       if (cls === 'local' && len < 18 && !wy.tags.name) continue;
-      roads.push({ c: cls, w: width, b: wy.tags.bridge && wy.tags.bridge !== 'no' ? 1 : 0, n: wy.tags.name || undefined, hw: wy.tags.highway, p: piece.map(([x, z]) => [r1(x), r1(z)]) });
+      roads.push({ c: cls, w: width, b: wy.tags.bridge && wy.tags.bridge !== 'no' ? 1 : 0, o: oneway ? 1 : 0, n: wy.tags.name || undefined, hw: wy.tags.highway, p: piece.map(([x, z]) => [r1(x), r1(z)]) });
     }
   }
   // People walk on every road except expressways and their ramps. Keep only the streets joined to the
@@ -866,8 +873,8 @@ function buildDistrict(id, d) {
     busStop,
   };
   const render = {
-    // c: class, w: width, b: bridge, x: not for walking (expressways, ramps, streets cut off from the rest).
-    roads: roads.map((rd) => ({ c: rd.c, w: rd.w, ...(rd.b ? { b: 1 } : {}), ...(connected(rd) ? {} : { x: 1 }), ...(rd.n ? { n: rd.n } : {}), p: flat(rd.p) })),
+    // c: class, w: width, b: bridge, o: one-way (in the order of its points), x: not for walking (expressways, ramps, streets cut off from the rest).
+    roads: roads.map((rd) => ({ c: rd.c, w: rd.w, ...(rd.b ? { b: 1 } : {}), ...(rd.o ? { o: 1 } : {}), ...(connected(rd) ? {} : { x: 1 }), ...(rd.n ? { n: rd.n } : {}), p: flat(rd.p) })),
     // Pedestrian crossings between streets that do not meet: x0, z0, x1, z1 for each.
     cross,
     water: water.map(flat),
