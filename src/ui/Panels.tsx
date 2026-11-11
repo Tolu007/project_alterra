@@ -1,3 +1,4 @@
+import { builders, holdings } from '../engine/property';
 import { FURNISHINGS, ageOf, datingOf, kidsOf, owns, spouseOf } from '../engine/family';
 import { useState } from 'react';
 import { NIGERIA, NIGERIA_H, NIGERIA_W, STATE_GEO, STATE_H, STATE_W } from '../data/geo';
@@ -58,6 +59,8 @@ export function LifePanel({ g }: { g: Game }) {
         🎂 {ageOf(g)} years old ·{' '}
         {spouseOf(g) ? `💍 married to ${spouseOf(g)!.name}` : datingOf(g) ? `💐 seeing ${datingOf(g)!.name}` : 'single'}
         {kidsOf(g) ? ` · 👶 ${kidsOf(g)} child${kidsOf(g) > 1 ? 'ren' : ''}` : ''}
+        {holdings(g, g.me).length ? ` · 🏘️ ${holdings(g, g.me).length} propert${holdings(g, g.me).length > 1 ? 'ies' : 'y'} worth ${naira(holdings(g, g.me).reduce((s, x) => s + x.s.value, 0))}` : ''}
+        {builders(g).some((f) => f.owner === g.me) ? ` · 🏗️ owns ${builders(g).filter((f) => f.owner === g.me).map((f) => f.name).join(', ')}` : ''}
         {FURNISHINGS.some((f) => owns(g, f.id)) && (
           <>
             <br />

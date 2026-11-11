@@ -152,9 +152,11 @@ export function streetPoint(lga: string, p: Pt): Pt {
   const s = snap(net, p);
   if (!s) return p;
   const e = net.edges[s.edge];
-  if (s.d <= e.hw + KERB + 1.5) return p;
+  // Already on the pavement: stay. Out on the tar, or off in a compound: the pavement beside it. Beside a
+  // one-way carriageway that is its right-hand kerb, since the other side is the median of a big road.
+  if (s.d >= e.hw + 0.3 && s.d <= e.hw + KERB + 1.5) return p;
   const n = left(net.xs[e.b] - net.xs[e.a], net.zs[e.b] - net.zs[e.a]);
-  const o = s.side * (e.hw + KERB);
+  const o = (e.ow ? 1 : s.side) * (e.hw + KERB);
   return [s.pt[0] + n[0] * o, s.pt[1] + n[1] * o];
 }
 
@@ -233,9 +235,16 @@ function trace(net: Net, sa: Snap, sb: Snap, from: Pt, to: Pt, drive: boolean, o
   // Centre-line points and how far from the centre line to keep on the road leading to each.
   let centre: Pt[];
   let widths: number[];
+  // For each stretch: 0 on an ordinary street, 1 along a one-way carriageway the way its traffic goes, -1 against it.
+  let flows: number[];
+  /** Which edge each stretch runs along. */
+  let ids: number[];
+  const flow = (e: Edge, forward: boolean) => (e.ow ? (forward ? 1 : -1) : 0);
   if (sa.edge === sb.edge && !(oneWay && ea.ow && sb.t < sa.t)) {
     centre = [sa.pt, sb.pt];
     widths = [offset(ea)];
+    flows = [flow(ea, sb.t >= sa.t)];
+    ids = [sa.edge];
   } else {
     const goal = new Map<number, number>(
       oneWay && eb.ow
@@ -295,34 +304,70 @@ function trace(net: Net, sa: Snap, sb: Snap, from: Pt, to: Pt, drive: boolean, o
     nodes.reverse();
     centre = [sa.pt, ...nodes.map((n): Pt => [xs[n], zs[n]]), sb.pt];
     widths = [offset(ea)];
+    flows = [flow(ea, nodes[0] === ea.b)];
+    ids = [sa.edge];
     for (let i = 1; i < nodes.length; i++) {
       const a = nodes[i - 1];
       const b = nodes[i];
-      const e = net.out[a].map((k) => edges[k]).find((x) => (x.a === a && x.b === b) || (x.a === b && x.b === a));
+      // Two corners can be joined by a street and by a footpath over it: the street is the one being walked along.
+      let k: number | undefined;
+      for (const j of net.out[a]) if (((edges[j].a === a && edges[j].b === b) || (edges[j].a === b && edges[j].b === a)) && (k === undefined || edges[j].hw > edges[k].hw)) k = j;
+      const e = k === undefined ? undefined : edges[k];
       widths.push(e ? offset(e) : offset(ea));
+      flows.push(e ? flow(e, e.a === a) : 0);
+      ids.push(k ?? -1);
     }
     widths.push(offset(eb));
+    flows.push(flow(eb, nodes[nodes.length - 1] === eb.a));
+    ids.push(sb.edge);
   }
 
   // Drop zero-length steps, keeping widths in line with the segments that remain.
   const pts: Pt[] = [centre[0]];
   const hws: number[] = [];
+  const dirs: number[] = [];
+  const along: number[] = [];
   for (let i = 1; i < centre.length; i++) {
     const p = centre[i];
     const q = pts[pts.length - 1];
     if (Math.hypot(p[0] - q[0], p[1] - q[1]) < 0.05) continue;
     pts.push(p);
     hws.push(widths[i - 1]);
+    dirs.push(flows[i - 1]);
+    along.push(ids[i - 1]);
   }
   if (pts.length < 2) return tidy([from, to]);
 
   // Walk on the pavement on the side you start from; ride in the right-hand lane.
   const d0: Pt = [pts[1][0] - pts[0][0], pts[1][1] - pts[0][1]];
   const n0 = left(d0[0], d0[1]);
-  const side = drive || n0[0] * (from[0] - pts[0][0]) + n0[1] * (from[1] - pts[0][1]) >= 0 ? 1 : -1;
-  const offs = hws.map((hw) => side * hw);
-  const path: Pt[] = [from];
+  let side = drive || n0[0] * (from[0] - pts[0][0]) + n0[1] * (from[1] - pts[0][1]) >= 0 ? 1 : -1;
+  // A big road is drawn as two one-way carriageways with a median between them, and the median is on the
+  // left of the traffic. So on foot along one you keep to its outer kerb (the right of the way the traffic
+  // goes), never the strip down the middle; once over there you stay on that side until the next one.
   const norms = pts.slice(1).map((p, i) => left(p[0] - pts[i][0], p[1] - pts[i][1]));
+  // Where two streets run close together, the pavement of one can be the tar of the other: then walk on
+  // the far side if that is clear, or else along the far kerb of the street next door.
+  const onTar = (i: number, off: number) => {
+    for (const f of [0.3, 0.5, 0.7]) {
+      const x = pts[i][0] + (pts[i + 1][0] - pts[i][0]) * f + norms[i][0] * off;
+      const z = pts[i][1] + (pts[i + 1][1] - pts[i][1]) * f + norms[i][1] * off;
+      if (tarAt(net, x, z, along[i])) return true;
+    }
+    return false;
+  };
+  const offs = hws.map((hw, i) => {
+    if (drive) return side * hw;
+    if (dirs[i]) side = dirs[i] > 0 ? 1 : -1;
+    if (!onTar(i, side * hw)) return side * hw;
+    if (!dirs[i] && !onTar(i, -side * hw)) {
+      side = -side;
+      return side * hw;
+    }
+    for (let more = 2; more <= 8; more += 2) if (!onTar(i, side * (hw + more))) return side * (hw + more);
+    return side * hw;
+  });
+  const path: Pt[] = [from];
   path.push([pts[0][0] + norms[0][0] * offs[0], pts[0][1] + norms[0][1] * offs[0]]);
   for (let i = 1; i < pts.length - 1; i++) {
     const p = pts[i];
@@ -334,7 +379,8 @@ function trace(net: Net, sa: Snap, sb: Snap, from: Pt, to: Pt, drive: boolean, o
     const d1: Pt = [-n1[1], n1[0]];
     const d2: Pt = [-n2[1], n2[0]];
     const cr = d1[0] * d2[1] - d1[1] * d2[0];
-    if (Math.abs(cr) > 0.08) {
+    // Changing sides is done straight across at the corner, not on a long slant down the road.
+    if (Math.abs(cr) > 0.08 && offs[i - 1] * offs[i] > 0) {
       const t = ((b[0] - a[0]) * d2[1] - (b[1] - a[1]) * d2[0]) / cr;
       const m: Pt = [a[0] + d1[0] * t, a[1] + d1[1] * t];
       if (Math.hypot(m[0] - p[0], m[1] - p[1]) < 3 * Math.max(Math.abs(offs[i - 1]), Math.abs(offs[i]))) {
@@ -349,6 +395,22 @@ function trace(net: Net, sa: Snap, sb: Snap, from: Pt, to: Pt, drive: boolean, o
   path.push([pts[last][0] + nl[0] * offs[last - 1], pts[last][1] + nl[1] * offs[last - 1]]);
   path.push(to);
   return tidy(path);
+}
+
+/** Is this point on the carriageway of some street other than `skip` and the streets that join it? */
+function tarAt(net: Net, x: number, z: number, skip: number): boolean {
+  const own = skip >= 0 ? net.edges[skip] : null;
+  for (const i of net.cells.get(`${Math.floor(x / CELL)},${Math.floor(z / CELL)}`) ?? []) {
+    const e = net.edges[i];
+    if (i === skip || (own && (e.a === own.a || e.a === own.b || e.b === own.a || e.b === own.b))) continue;
+    const ax = net.xs[e.a];
+    const az = net.zs[e.a];
+    const dx = net.xs[e.b] - ax;
+    const dz = net.zs[e.b] - az;
+    const t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / (dx * dx + dz * dz || 1e-9)));
+    if (Math.hypot(x - ax - dx * t, z - az - dz * t) < e.hw - 0.3) return true;
+  }
+  return false;
 }
 
 /** Drops steps too short to see, always keeping where the path starts and ends. */

@@ -198,7 +198,8 @@ export type Intent =
 
 /** Is this a place in the bound player's current LGA (or one of its plots)? */
 export function validPlace(g: Game, place: PlaceId, lot: number | null): boolean {
-  if (place === 'lot') return lot !== null && hood(g.player.at).lots.includes(lot);
+  // Any plot in town can be visited: the ones for lease to do business, the rest to deal in the property.
+  if (place === 'lot') return lot !== null && !!hood(g.player.at).plots[lot];
   return placesIn(g.player.at).includes(place);
 }
 

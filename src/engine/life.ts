@@ -1,4 +1,5 @@
 import { familyAct, homeExtras } from './family';
+import { builtOn, propertyAct, propertyActions, propertyWorth } from './property';
 import { PARTIES, partyById, type Level, type PartyId } from '../data/politics';
 import { PLACES, TRADES, tradeById, type PerkId, type PlaceId, type Skill } from '../data/trades';
 import { lgaById, stateById, type TradeId } from '../data/world';
@@ -236,6 +237,8 @@ export function actionsAt(g: Game, place: PlaceId): DayAction[] {
     });
   }
   if (place === 'lot') out.push(...lotActions(g, tired));
+  // The land and the building here: buy, sell, pull down, build.
+  out.push(...propertyActions(g, place === 'lot' ? g.lot : (hood(p.at).place[place] ?? null)));
   for (const e of eventsHere(g, p.at)) {
     if (e.place !== place || e.day !== g.day) continue;
     const on = isOn(g, e);
@@ -394,6 +397,8 @@ function lotActions(g: Game, tired: string | null): Draft[] {
   if (b && b.owner === g.me) return ownedActions(g, b, tired);
   if (b) return npcLotActions(g, b);
   const plot = hood(p.at).plots[g.lot];
+  // Only the plots set out for lease take a business, and not once a building stands there.
+  if (!hood(p.at).lots.includes(g.lot) || builtOn(g, p.at, g.lot)) return [];
   return BIZ.filter((t) => !isMobile(t.id) && needsFarmland(t.id) === (plot.kind === 'farm')).flatMap((t) => openOffer(g, t, g.lot!));
 }
 
@@ -688,6 +693,8 @@ export function act(g: Game, id: string): string {
     p.social = clamp(p.social + 5, 0, 100);
     return pick(g, ['Mama put gave you extra meat. You are her favourite now.', 'Amala, ewedu, gbegiri. The gist at the table was even hotter.', 'Rice and dodo, plus the latest gossip about the chairman.']);
   }
+  const deal = propertyAct(g, id, g.place === 'lot' ? g.lot : (hood(here).place[g.place] ?? null));
+  if (deal !== null) return deal;
   const homeLife = familyAct(g, id);
   if (homeLife !== null) return homeLife;
   if (id === 'family') {
@@ -1117,7 +1124,7 @@ export function netWorth(g: Game): number {
   const p = g.player;
   const assets = p.assets.reduce((s, a) => s + (a.kind === 'land' ? landPrice(g, a.lga) : a.price * 0.6), 0);
   const firms = playerBusinesses(g).reduce((s, b) => s + businessValue(g, b), 0);
-  return p.money + p.usd * g.macro.fxParallel + assets + firms + p.pension - p.loan;
+  return p.money + p.usd * g.macro.fxParallel + assets + firms + propertyWorth(g, g.me) + p.pension - p.loan;
 }
 
 export const placeName = (place: PlaceId) => PLACES[place].name;

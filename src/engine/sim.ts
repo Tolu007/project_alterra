@@ -1,4 +1,5 @@
 import { court, familyWeek } from './family';
+import { propertyWeek } from './property';
 import type { FedPolicy, LgaPolicy, StatePolicy } from '../data/politics';
 import type { PlaceId } from '../data/trades';
 import { LGAS, STATES, lgaById, type StateId } from '../data/world';
@@ -273,6 +274,7 @@ function endWeek(g: Game) {
   eachSeat(g, (s) => {
     for (const line of weeklyLife(g)) personal(s.id, line);
     for (const line of familyWeek(g)) personal(s.id, line);
+    for (const line of propertyWeek(g)) personal(s.id, line);
   });
   headlines.push(...npcWeek(g), ...cultureNews(g));
 

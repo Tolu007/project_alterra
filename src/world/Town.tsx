@@ -1,3 +1,4 @@
+import { fillerKinds as kindsOf, type FillerKind } from '../engine/property';
 import { useFrame } from '@react-three/fiber';
 import { useMemo, useRef, type ReactNode } from 'react';
 import * as THREE from 'three';
@@ -233,38 +234,9 @@ export function NightLights({ lightsOn, playerPos }: { lightsOn: boolean; player
 
 // ───────────── plots nobody uses ─────────────
 
-export type FillerKind = 'house' | 'flats' | 'church' | 'mosque' | 'kiosks' | 'unfinished' | 'station' | 'trees';
-
-const fillerMemo = new Map<string, Map<number, FillerKind>>();
-
-export function fillerKinds(lga: string, style: SceneStyle): Map<number, FillerKind> {
-  const hit = fillerMemo.get(lga);
-  if (hit) return hit;
-  const h = hood(lga);
-  const rnd = seeded(`fill:${lga}`);
-  const out = new Map<number, FillerKind>();
-  const big = h.fillers.filter((id) => !h.plots[id].small);
-  const small = h.fillers.filter((id) => h.plots[id].small);
-  const station = big.find((id) => h.plots[id].onMain) ?? big[0];
-  if (station !== undefined) out.set(station, 'station');
-  const rest = big.filter((id) => id !== station);
-  const worship: FillerKind[] = earthen(style) ? ['mosque', 'mosque'] : style.startsWith('lagos') ? ['church', 'mosque'] : ['church', 'church'];
-  for (const k of worship) {
-    const free = rest.filter((id) => !out.has(id));
-    if (free.length) out.set(free[Math.floor(rnd() * free.length)], k);
-  }
-  for (const id of rest) {
-    if (out.has(id)) continue;
-    const r = rnd();
-    out.set(id, r < 0.35 ? 'house' : r < 0.65 ? 'flats' : r < 0.8 ? 'unfinished' : 'kiosks');
-  }
-  for (const id of small) {
-    const r = rnd();
-    out.set(id, r < 0.45 ? 'house' : r < 0.7 ? 'kiosks' : 'trees');
-  }
-  fillerMemo.set(lga, out);
-  return out;
-}
+export type { FillerKind } from '../engine/property';
+/** Which ordinary building stands on each plot (the rules need to know too: see property.ts). */
+export const fillerKinds = (lga: string, _style?: SceneStyle) => kindsOf(lga);
 
 export function Tree({ x, z, kind }: { x: number; z: number; kind: 'palm' | 'neem' }) {
   if (kind === 'palm') {

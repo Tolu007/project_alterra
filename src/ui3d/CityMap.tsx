@@ -90,6 +90,8 @@ export function CityMinimap({ g, track, trail, selected, onWalk, onClose, onWhol
     let last: Pt = [...track.current];
     let face = 0;
     let frame = 0;
+    let drawn = '';
+    let wayDrawn = '';
     const tick = () => {
       const [x, z] = track.current;
       const moved = Math.hypot(x - last[0], z - last[1]);
@@ -97,18 +99,28 @@ export function CityMinimap({ g, track, trail, selected, onWalk, onClose, onWhol
         face = (Math.atan2(x - last[0], -(z - last[1])) * 180) / Math.PI;
         last = [x, z];
       }
-      me.current?.setAttribute('transform', `translate(${x.toFixed(1)} ${z.toFixed(1)}) rotate(${face.toFixed(0)})`);
-      if (span && svg.current) svg.current.setAttribute('viewBox', `${(x - span / 2).toFixed(1)} ${(z - span * 0.42).toFixed(1)} ${span} ${(span * 0.84).toFixed(1)}`);
+      // Every change to the map makes the browser draw all its streets again, so it moves a few times a
+      // second, and not at all while you stand still.
+      const tf = `translate(${x.toFixed(1)} ${z.toFixed(1)}) rotate(${face.toFixed(0)})`;
+      const due = frame++ % 4 === 0;
+      if (due && tf !== drawn) {
+        drawn = tf;
+        me.current?.setAttribute('transform', tf);
+        if (span && svg.current) svg.current.setAttribute('viewBox', `${(x - span / 2).toFixed(1)} ${(z - span * 0.42).toFixed(1)} ${span} ${(span * 0.84).toFixed(1)}`);
+      }
       // The way to go changes slowly: redraw it a few times a second.
-      if (frame++ % 6 === 0) {
+      if (frame % 8 === 1) {
         const path = trail?.current ?? [];
         const line = path.length ? `${x.toFixed(1)},${z.toFixed(1)} ${path.map((p) => `${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' ')}` : '';
-        way.current?.setAttribute('points', line);
-        wayCase.current?.setAttribute('points', line);
-        const end = path[path.length - 1];
-        if (flag.current) {
-          flag.current.style.display = end ? '' : 'none';
-          if (end) flag.current.setAttribute('transform', `translate(${end[0].toFixed(1)} ${end[1].toFixed(1)})`);
+        if (line !== wayDrawn) {
+          wayDrawn = line;
+          way.current?.setAttribute('points', line);
+          wayCase.current?.setAttribute('points', line);
+          const end = path[path.length - 1];
+          if (flag.current) {
+            flag.current.style.display = end ? '' : 'none';
+            if (end) flag.current.setAttribute('transform', `translate(${end[0].toFixed(1)} ${end[1].toFixed(1)})`);
+          }
         }
       }
       raf = requestAnimationFrame(tick);

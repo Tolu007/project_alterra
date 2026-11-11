@@ -6,6 +6,7 @@ import { lgaById, stateById } from '../data/world';
 import { businessOn, freeLots, isMobile, playerBusinesses, stageName, staffCap } from '../engine/business';
 import { clockLabel, dateLabel, dayPart, duration, isRainySeason } from '../engine/calendar';
 import { officeTitle } from '../engine/elections';
+import { standing } from '../engine/property';
 import { HOURS, actionsAt, naira, placesIn, rideHailActions, type DayAction } from '../engine/life';
 import { COLS, MAIN_Z, PAVEMENT, ROAD_X, ROAD_Z, ROWS, SIDE_HALF, halfWidth, hood, type Pt } from '../engine/map';
 import { activeShocks } from '../engine/shocks';
@@ -610,13 +611,16 @@ function ActionMenu({ g, sel, actions, onRun, onClose }: { g: Game; sel: Selecti
   const sorted = useMemo(() => actions.slice().sort((a, b) => Number(!!a.blocked) - Number(!!b.blocked)), [actions]);
   const biz = sel.place === 'lot' && sel.lot !== null ? businessOn(g, g.player.at, sel.lot) : undefined;
   const farm = sel.place === 'lot' && sel.lot !== null && hood(g.player.at).plots[sel.lot]?.kind === 'farm';
-  const title = sel.place === 'lot' ? (biz ? biz.name : farm ? 'Farmland for lease' : 'Plot for lease') : sel.place === 'home' ? 'Home' : PLACES[sel.place].name;
+  const st = sel.place === 'lot' && sel.lot !== null ? standing(g, g.player.at, sel.lot) : null;
+  // A bare plot nobody has bought is "for sale or lease"; anything else goes by what it is.
+  const bare = !st || (st.role === 'lot' && st.on === 'empty' && st.owner < 0);
+  const title = sel.place === 'lot' ? (biz ? biz.name : !bare ? (st!.owner === g.me ? `Your ${st!.name.toLowerCase()}` : st!.name) : farm ? 'Farmland for sale or lease' : 'Plot for sale or lease') : sel.place === 'home' ? 'Home' : PLACES[sel.place].name;
   // Real places in the mapped districts go by their real names.
   const h = hood(g.player.at);
   const realName = sel.place === 'busstop' ? h.real?.stopName : sel.place !== 'lot' && sel.place !== 'home' ? h.plots[h.place[sel.place] ?? -1]?.real : undefined;
   const here = lgaById(g.player.at);
   const named = realName ?? (sel.place === 'airport' ? here.airport : sel.place === 'jetty' ? here.jetty : undefined);
-  const sub = biz ? `${bizType(biz.type).name} · ${stageName(biz.type, biz.level).replace(/^an? /, '')} · level ${biz.level}` : sel.place === 'lot' ? 'Lease it and build. Shacks grow into big buildings as you expand.' : named ?? null;
+  const sub = biz ? `${bizType(biz.type).name} · ${stageName(biz.type, biz.level).replace(/^an? /, '')} · level ${biz.level}` : sel.place === 'lot' ? (bare ? 'Lease it for a business, or buy the land and build on it.' : `${st!.owner === g.me ? 'Yours' : st!.owner >= 0 && g.people[st!.owner] ? `Owned by ${g.people[st!.owner].name}` : 'Privately owned'} · worth ${naira(st!.value)}${st!.rent ? ` · rent ${naira(st!.rent)} a week` : ''}`) : named ?? null;
   return (
     <div className="action-menu" role="dialog" aria-label={`${title} actions`}>
       <div className="am-head">

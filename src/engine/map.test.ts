@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { appendFileSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { LGAS } from '../data/world';
 import { testGame } from './autoplay';
@@ -189,4 +189,67 @@ describe('worlds from before the real map', () => {
     expect(new Set(lagos.map((x) => `${x.lga}:${x.plot}`)).size).toBe(lagos.length);
     for (const x of lagos) expect(hood(x.lga).lots).toContain(x.plot);
   });
+});
+
+describe('walking in the mapped districts', () => {
+  it('keeps to the pavement: hardly any of a walk is on the tar, and none along the median of a big road', () => {
+    const bad: [string, number, number][] = [];
+    for (const l of LGAS) {
+      const h = hood(l.id);
+      if (!h.real) continue;
+      const r = JSON.parse(readFileSync(new URL(`../data/city/render/${l.id}.json`, import.meta.url), 'utf8')) as { roads: { w: number; o?: 1; x?: 1; p: number[] }[] };
+      const segs: { ax: number; az: number; dx: number; dz: number; hw: number; o: boolean }[] = [];
+      for (const road of r.roads) {
+        if (road.x) continue;
+        for (let i = 2; i < road.p.length; i += 2) segs.push({ ax: road.p[i - 2], az: road.p[i - 1], dx: road.p[i] - road.p[i - 2], dz: road.p[i + 1] - road.p[i - 1], hw: road.w / 2, o: !!road.o });
+      }
+      const doors = Object.values(h.place).map((id) => h.plots[id!].door);
+      let total = 0;
+      let tar = 0;
+      let median = 0;
+      for (let i = 0; i < doors.length; i++) {
+        const path = route(l.id, doors[i], doors[(i + 5) % doors.length]);
+        // The first and last steps are from the door to the kerb and back.
+        for (let k = 2; k < path.length - 1; k++) {
+          const [x0, z0] = path[k - 1];
+          const [x1, z1] = path[k];
+          const len = Math.hypot(x1 - x0, z1 - z0);
+          // Short steps are corners and crossings; it is the long stretches that must be on the pavement.
+          if (len < 25) continue;
+          for (let s = 1; s < len; s += 2) {
+            const x = x0 + ((x1 - x0) * s) / len;
+            const z = z0 + ((z1 - z0) * s) / len;
+            total++;
+            let onTar = false;
+            let why = '';
+            let onMedian = false;
+            for (const e of segs) {
+              const l2 = e.dx * e.dx + e.dz * e.dz || 1e-9;
+              const t = Math.max(0, Math.min(1, ((x - e.ax) * e.dx + (z - e.az) * e.dz) / l2));
+              const d = Math.hypot(x - e.ax - e.dx * t, z - e.az - e.dz * t);
+              // Going along the carriageway, that is; stepping over a side street is how you cross it.
+              const along = Math.abs((x1 - x0) * e.dx + (z1 - z0) * e.dz) / (len * Math.sqrt(l2));
+              if (d < e.hw - 0.4 && along > 0.8) {
+                onTar = true;
+                why = `hw${e.hw} ${e.o ? 'ow' : '2w'} seg ${[e.ax, e.az, e.ax + e.dx, e.az + e.dz].map((v) => v.toFixed(1)).join(',')} d${d.toFixed(1)}`;
+              }
+              // Left of a one-way carriageway, hard against it: the median.
+              else if (e.o && t > 0.05 && t < 0.95 && d < e.hw + 1.6 && e.dx * (z - e.az) - e.dz * (x - e.ax) < 0) onMedian = true;
+            }
+            if (onTar && process.env.WALK_OUT && l.id === 'IKJ' && s < 3) appendFileSync(process.env.WALK_OUT, `  route ${i} step ${k}/${path.length} ${[x0, z0, x1, z1].map((v) => v.toFixed(1)).join(',')} ${why}
+`);
+            if (onTar) tar++;
+            else if (onMedian) median++;
+          }
+        }
+      }
+      if (process.env.WALK_OUT) appendFileSync(process.env.WALK_OUT, `${l.id} tar ${(tar / total).toFixed(3)} median ${(median / total).toFixed(3)}
+`);
+      bad.push([l.id, tar / total, median / total]);
+    }
+    for (const [id, tar, median] of bad) {
+      expect(tar, `${id} on the tar`).toBeLessThan(0.06);
+      expect(median, `${id} along a median`).toBeLessThan(0.1);
+    }
+  }, 120_000);
 });

@@ -413,6 +413,9 @@ export interface Game {
   others?: PublicSeat[];
   /** What players do with each other: chat, offers, jobs, loans (see social.ts). The server sends you only your part. */
   social?: import('./social').Social;
+  /** Who owns which plot and what has been built or pulled down there, and the construction companies (see property.ts). */
+  estate?: Record<string, import('./property').Deed>;
+  builders?: import('./property').Builder[];
   /** Flags about the world rather than any one player. */
   wflags: Record<string, number>;
   /** Shared worlds run on a real-time clock: this many game minutes per real minute, from this real moment. */

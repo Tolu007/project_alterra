@@ -1,6 +1,6 @@
-import { Html, OrbitControls } from '@react-three/drei';
+import { Html, OrbitControls, PerformanceMonitor } from '@react-three/drei';
 import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import * as THREE from 'three';
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
 import { ROLE_NAMES } from '../data/people';
@@ -12,12 +12,14 @@ import { DAY_NAMES, clockLabel, isRainySeason } from '../engine/calendar';
 import { okadaBanned } from '../engine/economy';
 import { officeTitle } from '../engine/elections';
 import { COLS, MAIN_HALF, MAIN_Z, ROAD_X, ROAD_Z, ROWS, SIDE_HALF, doorOf, halfWidth, hood, route, walkable, type Plot, type Pt } from '../engine/map';
-import type { Game, Person } from '../engine/types';
+import { builders, buildType, estateKey, publicLandmark, type BuildId } from '../engine/property';
+import type { Business, Game, Person } from '../engine/types';
 import { Brt, Canoe, Car, Danfo, Keke, Mover, Okada, Person3D, Truck, Walker, mat, type Pose } from './Actors';
 import { BizBuilding } from './BizBuildings';
 import { Building, earthen } from './Buildings';
 import { CityPedestrians, CityScene, CityStreetLife, CityTraffic, LANDMARK_HEIGHT, LandmarkModel, PlaceModel, billboardSpots, trafficAt } from './City';
 import { useCity, type CityRender } from './cityData';
+import { ESTATE_HEIGHT, EstateBuilding } from './Property';
 import { labelTexture, nameTexture } from './textures';
 import { Billboard, BusStop, Filler, FootBridge, NightLights, StreetLights, Streets, Tree, VacantLot, WALLS, fillerKinds, seeded } from './Town';
 
@@ -106,17 +108,26 @@ function facingPoint(lga: string, place: PlaceId, lot: number | null): Pt | null
 export function World(props: WorldProps) {
   const h = hood(props.g.player.at);
   const city = useCity(h.real ? props.g.player.at : null);
+  // Slow machines and phones get a softer picture rather than a stutter: the resolution steps down when
+  // frames are slow (and back up when there is room), and at the bottom the sun stops casting shadows.
+  const [quality, setQuality] = useState(0.8);
+  const dpr = Math.min(typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1, 0.7 + Math.round(quality * 4) * 0.225);
   return (
     <>
-      <Canvas flat shadows dpr={[1, 1.6]} camera={{ fov: 40, near: 0.5, far: 700, position: [20, 22, 34] }} gl={{ antialias: true }}>
-        <Scene {...props} />
+      <Canvas flat shadows dpr={dpr} camera={{ fov: 40, near: 0.5, far: 700, position: [20, 22, 34] }} gl={{ antialias: true }} onCreated={(s) => { if (import.meta.env.DEV) (window as unknown as { __gl: unknown }).__gl = s.gl; }}>
+        <PerformanceMonitor factor={0.8} bounds={() => [36, 55]} onChange={({ factor }) => setQuality(factor)} />
+        <Scene {...props} shadows={quality > 0.12} />
       </Canvas>
       {h.real && !city && <div className="map-loading">Loading the map of {h.real.name}…</div>}
     </>
   );
 }
 
-function Scene({ g, clock, busy, target, selected, floats, onWalk, onArrive, onTalk, track, trail }: WorldProps) {
+function Scene({ g, clock, busy, target, selected, floats, onWalk: onWalkNow, onArrive, onTalk, track, trail, shadows }: WorldProps & { shadows: boolean }) {
+  // One function for the life of the scene, so the buildings are not all rebuilt whenever the game ticks.
+  const walkRef = useRef(onWalkNow);
+  walkRef.current = onWalkNow;
+  const onWalk = useCallback((t: Omit<WalkTarget, 'nonce'>) => walkRef.current(t), []);
   const lga = lgaById(g.player.at);
   const style = lga.style;
   const h = hood(lga.id);
@@ -221,19 +232,25 @@ function Scene({ g, clock, busy, target, selected, floats, onWalk, onArrive, onT
     if (trail) trail.current = path.current;
   });
 
-  const walkTo = (e: ThreeEvent<MouseEvent>) => {
+  const walkTo = useCallback((e: ThreeEvent<MouseEvent>) => {
     e.stopPropagation();
     if (e.delta > 6) return;
-    onWalk({ point: [e.point.x, e.point.z] });
-  };
+    walkRef.current({ point: [e.point.x, e.point.z] });
+  }, []);
 
   const me = g.people[g.me];
   const party = g.player.party ? partyById(g.player.party) : partyById(g.states[lga.state].party);
   const kekeColor = lga.state === 'KN' ? '#d6b21a' : '#1e8f5a';
   const walls = WALLS[style];
-  const kinds = fillerKinds(lga.id, style);
   const prices = g.prices[lga.state];
-  const bizHere = g.businesses.filter((b) => b.lga === lga.id && b.plot >= 0);
+  // What has been bought, pulled down or built here, and the businesses on the plots: both only change
+  // now and then, so what is drawn from them is kept until they do.
+  const estKey = estateKey(g, lga.id);
+  const est = useMemo(() => estateHere(g, lga.id), [estKey, lga.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  const bizKey = g.businesses.map((b) => (b.lga === lga.id && b.plot >= 0 ? `${b.id}:${b.plot}:${b.type}:${b.level}:${b.name}:${b.owner === g.me}` : '')).join('|');
+  const bizHere = useMemo(() => g.businesses.filter((b) => b.lga === lga.id && b.plot >= 0), [bizKey, lga.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  const selLot = selected && selected.place === 'lot' ? selected.lot : null;
+  const bridgeAt = useMemo(() => (h.real ? { x: h.real.road[0] + Math.cos(h.busRot) * 14, z: h.real.road[1] - Math.sin(h.busRot) * 14, rot: h.busRot, span: h.real.span } : undefined), [h]);
   const okada = !okadaBanned(g, lga.id);
   const isSel = (place: PlaceId, lot: number | null) => !!selected && selected.place === place && (place !== 'lot' || selected.lot === lot);
   const ringAt = selected ? doorOf(lga.id, selected.place, selected.lot) : null;
@@ -241,11 +258,11 @@ function Scene({ g, clock, busy, target, selected, floats, onWalk, onArrive, onT
 
   return (
     <>
-      <DayLight clock={clock} rainy={rainy} playerPos={pos} ground={earthen(style) ? '#b5875a' : '#8a8577'} />
+      <DayLight clock={clock} rainy={rainy} playerPos={pos} ground={earthen(style) ? '#b5875a' : '#8a8577'} shadows={shadows} />
       <FollowCamera target={pos} />
 
       {h.real ? (
-        city && <CityScene city={city} h={h} style={style} tar={g.lgaInfra[lga.id].roads >= 45} lightsOn={lightsOn} night={night} playerPos={pos} onClick={walkTo as never} />
+        city && <CitySceneM city={city} h={h} style={style} tar={g.lgaInfra[lga.id].roads >= 45} lightsOn={lightsOn} night={night} playerPos={pos} onClick={walkTo as never} />
       ) : (
         <>
           <Streets lga={lga.id} style={style} roads={g.lgaInfra[lga.id].roads} onClick={walkTo as never} />
@@ -263,14 +280,14 @@ function Scene({ g, clock, busy, target, selected, floats, onWalk, onArrive, onT
         if (whole) {
           return (
             <PlotGroup key={place} plot={plot} playerPos={pos} label={placeLabel(place, plot)} labelY={place === 'airport' ? 21 : 8} labelRange={90} open={place !== 'airport' && place !== 'palace'} selected={isSel(place, null)} onClick={() => onWalk({ place })}>
-              <PlaceModel kind={place} w={plot.w} d={plot.d} style={style} lit={lightsOn} sign={plot.real ?? (place === 'airport' ? lga.airport : place === 'jetty' ? lga.jetty : null) ?? PLACES[place].name} />
+              <PlaceModelM kind={place} w={plot.w} d={plot.d} style={style} lit={lightsOn} sign={plot.real ?? (place === 'airport' ? lga.airport : place === 'jetty' ? lga.jetty : null) ?? PLACES[place].name} />
             </PlotGroup>
           );
         }
         return (
           <PlotGroup key={place} plot={plot} playerPos={pos} label={placeLabel(place, plot)} labelY={place === 'office' ? 19 : 9.5} labelRange={70} selected={isSel(place, null)} onClick={() => onWalk({ place })}>
             <group position={[0, 0, plot.d / 2 - (farmPlot ? 7 : 4.3)]} scale={farmPlot ? 1.5 : plot.real ? 1.2 : 1}>
-              <Building
+              <BuildingM
                 kind={place}
                 style={style}
                 wall={walls[i % walls.length]}
@@ -290,36 +307,7 @@ function Scene({ g, clock, busy, target, selected, floats, onWalk, onArrive, onT
         );
       })}
 
-      {h.lots.map((id) => {
-        const plot = h.plots[id];
-        const b = bizHere.find((x) => x.plot === id);
-        const label = b ? b.name : plot.kind === 'farm' ? 'Farmland for lease' : 'Plot for lease';
-        const tall = b ? stageOf(b.type, b.level) : 0;
-        return (
-          <PlotGroup key={`lot${id}`} plot={plot} playerPos={pos} label={label} labelY={b ? 5 + tall * 3 : 4} labelRange={b ? 90 : 26} own={!!b} selected={isSel('lot', id)} onClick={() => onWalk({ place: 'lot', lot: id })}>
-            {b ? <BizBuilding b={b} w={plot.w} d={plot.d} style={style} wall={walls[id % walls.length]} lit={lightsOn || (night && tall >= 3)} power={power} /> : <VacantLot plot={plot} />}
-          </PlotGroup>
-        );
-      })}
-
-      {h.fillers.map((id) => {
-        const plot = h.plots[id];
-        return (
-          <PlotGroup key={`f${id}`} plot={plot} playerPos={pos} onClick={() => onWalk({ point: plot.door })}>
-            <Filler plot={plot} kind={kinds.get(id) ?? 'house'} style={style} wall={walls[(id * 7) % walls.length]} lit={lightsOn} power={power} seed={id} petrol={prices.petrol} scarcity={prices.scarcity} />
-          </PlotGroup>
-        );
-      })}
-
-      {h.real?.landmarks.map((id) => {
-        const plot = h.plots[id];
-        const lm = plot.landmark!;
-        return (
-          <PlotGroup key={`lm${id}`} plot={plot} playerPos={pos} label={lm.n} labelY={(LANDMARK_HEIGHT[lm.k] ?? 7) + 2.5} labelRange={90} onClick={() => onWalk({ point: plot.door })}>
-            <LandmarkModel kind={lm.k} w={plot.w} d={plot.d} style={style} lit={lightsOn} name={lm.n} />
-          </PlotGroup>
-        );
-      })}
+      <PlotLists lga={lga.id} style={style} lightsOn={lightsOn} night={night} power={power} petrol={prices.petrol} scarcity={prices.scarcity} playerPos={pos} onWalk={onWalk} est={est} biz={bizHere} sel={selLot} />
 
       <group
         onClick={(e) => {
@@ -328,22 +316,18 @@ function Scene({ g, clock, busy, target, selected, floats, onWalk, onArrive, onT
           onWalk({ place: 'busstop' });
         }}
       >
-        <BusStop lga={lga.id} name={h.real?.stopName ?? lga.nick} lightsOn={lightsOn} />
+        <BusStopM lga={lga.id} name={h.real?.stopName ?? lga.nick} lightsOn={lightsOn} />
         <PlaceLabel x={h.busStop[0]} z={h.busStop[1]} y={5.2} text={h.real ? `${h.real.stopName} bus stop` : 'Bus stop'} playerPos={pos} selected={isSel('busstop', null)} />
       </group>
-      {h.real ? (
-        <FootBridge lga={lga.id} at={{ x: h.real.road[0] + Math.cos(h.busRot) * 14, z: h.real.road[1] - Math.sin(h.busRot) * 14, rot: h.busRot, span: h.real.span }} />
-      ) : (
-        <FootBridge lga={lga.id} />
-      )}
+      <FootBridgeM lga={lga.id} at={bridgeAt} />
       <Billboards g={g} lga={lga.id} lit={lightsOn} city={city} />
 
       {h.real ? (
         city && (
           <>
-            <CityTraffic city={city} h={h} lagos={lga.state === 'LA'} kekeColor={kekeColor} okada={okada} playerPos={pos} busy={trafficAt(hour)} lightsOn={night} />
-            <CityPedestrians city={city} h={h} playerPos={pos} rainy={rainy} />
-            <CityStreetLife city={city} h={h} playerPos={pos} rainy={rainy} />
+            <CityTrafficM city={city} h={h} lagos={lga.state === 'LA'} kekeColor={kekeColor} okada={okada} playerPos={pos} busy={trafficAt(hour)} lightsOn={night} />
+            <CityPedestriansM city={city} h={h} playerPos={pos} rainy={rainy} />
+            <CityStreetLifeM city={city} h={h} playerPos={pos} rainy={rainy} />
           </>
         )
       ) : (
@@ -381,6 +365,84 @@ function Scene({ g, clock, busy, target, selected, floats, onWalk, onArrive, onT
   );
 }
 
+const BuildingM = memo(Building);
+const PlaceModelM = memo(PlaceModel);
+const CitySceneM = memo(CityScene);
+const CityTrafficM = memo(CityTraffic);
+const CityPedestriansM = memo(CityPedestrians);
+const CityStreetLifeM = memo(CityStreetLife);
+const BusStopM = memo(BusStop);
+const FootBridgeM = memo(FootBridge);
+
+/** What stands on a plot that somebody has bought, cleared or built on. */
+interface EstateHere {
+  on: BuildId | 'site' | 'empty' | null;
+  mine: boolean;
+  /** The contractor on site. */
+  board?: string;
+}
+
+function estateHere(g: Game, lga: string): Map<number, EstateHere> {
+  const out = new Map<number, EstateHere>();
+  for (const [key, d] of Object.entries(g.estate ?? {})) {
+    if (!key.startsWith(`${lga}:`)) continue;
+    const site = !!d.site && g.week < d.site.done;
+    out.set(Number(key.slice(lga.length + 1)), { on: site ? 'site' : (d.site?.kind ?? d.on ?? null), mine: d.owner === g.me, board: site ? builders(g)[d.site!.firm]?.name : undefined });
+  }
+  return out;
+}
+
+const estateLabel = (e: EstateHere) => (e.on === 'site' ? 'Building site' : e.on === 'empty' ? (e.mine ? 'Your plot' : 'Empty plot') : e.on ? `${e.mine ? 'Your ' : ''}${e.mine ? buildType(e.on).name.toLowerCase() : buildType(e.on).name}` : e.mine ? 'Your property' : undefined);
+
+/**
+ * The plots for lease, the ordinary buildings and the famous ones. They are many, and they only change
+ * when somebody buys, builds or expands, so they are drawn once and kept while the clock runs.
+ */
+const PlotLists = memo(function PlotLists({ lga, style, lightsOn, night, power, petrol, scarcity, playerPos, onWalk, est, biz, sel }: { lga: string; style: SceneStyle; lightsOn: boolean; night: boolean; power: boolean; petrol: number; scarcity: boolean; playerPos: React.MutableRefObject<THREE.Vector3>; onWalk: (t: Omit<WalkTarget, 'nonce'>) => void; est: Map<number, EstateHere>; biz: Business[]; sel: number | null }) {
+  const h = hood(lga);
+  const walls = WALLS[style];
+  const kinds = fillerKinds(lga);
+  const estate = (id: number, e: EstateHere) => <EstateBuilding plot={h.plots[id]} on={e.on!} style={style} wall={walls[(id * 7) % walls.length]} lit={lightsOn} power={power} board={e.board} />;
+  return (
+    <>
+      {h.lots.map((id) => {
+        const plot = h.plots[id];
+        const b = biz.find((x) => x.plot === id);
+        const e = est.get(id);
+        const built = !b && e?.on && e.on !== 'empty' ? e : null;
+        const label = b ? b.name : built ? estateLabel(built)! : e?.mine ? (plot.kind === 'farm' ? 'Your farmland' : 'Your plot') : plot.kind === 'farm' ? 'Farmland for sale or lease' : 'Plot for sale or lease';
+        const tall = b ? stageOf(b.type, b.level) : 0;
+        return (
+          <PlotGroup key={`lot${id}`} plot={plot} playerPos={playerPos} label={label} labelY={b ? 5 + tall * 3 : built ? ESTATE_HEIGHT[built.on!] : 4} labelRange={b || built ? 90 : 26} own={!!b || !!e?.mine} selected={sel === id} onClick={() => onWalk({ place: 'lot', lot: id })}>
+            {b ? <BizBuilding b={b} w={plot.w} d={plot.d} style={style} wall={walls[id % walls.length]} lit={lightsOn || (night && tall >= 3)} power={power} /> : built ? estate(id, built) : <VacantLot plot={plot} />}
+          </PlotGroup>
+        );
+      })}
+
+      {h.fillers.map((id) => {
+        const plot = h.plots[id];
+        const e = est.get(id);
+        return (
+          <PlotGroup key={`f${id}`} plot={plot} playerPos={playerPos} label={e ? estateLabel(e) : undefined} labelY={e?.on ? ESTATE_HEIGHT[e.on] : 7} labelRange={e?.mine ? 90 : 40} own={e?.mine} selected={sel === id} onClick={() => onWalk({ place: 'lot', lot: id })}>
+            {e?.on ? estate(id, e) : <Filler plot={plot} kind={kinds.get(id) ?? 'house'} style={style} wall={walls[(id * 7) % walls.length]} lit={lightsOn} power={power} seed={id} petrol={petrol} scarcity={scarcity} />}
+          </PlotGroup>
+        );
+      })}
+
+      {h.real?.landmarks.map((id) => {
+        const plot = h.plots[id];
+        const lm = plot.landmark!;
+        const e = est.get(id);
+        return (
+          <PlotGroup key={`lm${id}`} plot={plot} playerPos={playerPos} label={e?.on ? estateLabel(e) : lm.n} labelY={e?.on ? ESTATE_HEIGHT[e.on] : (LANDMARK_HEIGHT[lm.k] ?? 7) + 2.5} labelRange={90} own={e?.mine} selected={sel === id} onClick={() => onWalk(publicLandmark(lm.k) ? { point: plot.door } : { place: 'lot', lot: id })}>
+            {e?.on ? estate(id, e) : <LandmarkModel kind={lm.k} w={plot.w} d={plot.d} style={style} lit={lightsOn} name={lm.n} />}
+          </PlotGroup>
+        );
+      })}
+    </>
+  );
+});
+
 /** What a place's floating label says: the real name where the map has one ("Computer Village"), with the kind of place for streets. */
 function placeLabel(place: PlaceId, plot: Plot): string {
   if (place === 'home') return 'Home';
@@ -402,24 +464,41 @@ function posterFor(g: Game, lga: string): string | null {
  * the way walls go down in a life sim, so you can always see yourself and the street.
  */
 function PlotGroup({ plot, playerPos, label, labelY = 9, labelRange = 60, own, open, selected, onClick, children }: { plot: Plot; playerPos: React.MutableRefObject<THREE.Vector3>; label?: string; labelY?: number; labelRange?: number; own?: boolean; /** Open stalls and sheds you can see through: never sunk. */ open?: boolean; selected?: boolean; onClick: () => void; children: ReactNode }) {
+  const root = useRef<THREE.Group>(null);
   const body = useRef<THREE.Group>(null);
   const tag = useRef<THREE.Sprite>(null);
+  const reach = 372 + Math.max(plot.w, plot.d);
   const { camera } = useThree();
   const tex = useMemo(() => (label ? labelTexture(label, !!selected || !!own) : null), [label, selected, own]);
   const box = useRef(new THREE.Box3());
   const measured = useRef(-1);
   useFrame(({ clock }, dt) => {
     const b = body.current;
-    if (!b) return;
+    const r = root.current;
+    if (!b || !r) return;
+    // Past where the haze swallows everything there is nothing to draw, and nothing to work out.
+    const seen = Math.hypot(plot.x - camera.position.x, plot.z - camera.position.z) < reach;
+    if (r.visible !== seen) r.visible = seen;
+    if (!seen) return;
+    const p = playerPos.current;
+    const near = Math.abs(plot.x - p.x) + Math.abs(plot.z - p.z);
+    // Only a building close by can stand between you and the camera.
+    if (near > 190 && measured.current >= 0) {
+      if (b.scale.y !== 1) b.scale.y = 1;
+      if (tag.current) {
+        tag.current.visible = !!selected;
+        tag.current.position.y = labelY;
+      }
+      return;
+    }
     // Measure the building now and then (it grows when you expand), undoing the cutaway's own squash.
-    if (clock.elapsedTime - measured.current > 2) {
+    if (clock.elapsedTime - measured.current > 2 || measured.current < 0) {
       measured.current = clock.elapsedTime;
       b.updateWorldMatrix(true, true);
       box.current.setFromObject(b);
       box.current.max.y /= Math.max(0.05, b.scale.y);
     }
     // Sink it only if it actually stands between the camera and you.
-    const p = playerPos.current;
     const cut = !open && blocks(box.current, camera.position, p);
     const want = cut ? 0.1 : 1;
     if (Math.abs(b.scale.y - want) > 0.002) b.scale.y += (want - b.scale.y) * Math.min(1, dt * 8);
@@ -429,7 +508,7 @@ function PlotGroup({ plot, playerPos, label, labelY = 9, labelRange = 60, own, o
     }
   });
   return (
-    <group position={[plot.x, 0, plot.z]}>
+    <group ref={root} position={[plot.x, 0, plot.z]}>
       <group
         rotation={[0, plot.rot, 0]}
         onClick={(e) => {
@@ -496,7 +575,7 @@ const SKY = new THREE.ShaderMaterial({
 });
 
 /** Eases sky, sun and ambient light towards the requested time of day, every frame. The sun's shadow box follows you. */
-function DayLight({ clock, rainy, playerPos, ground }: { clock: React.MutableRefObject<number>; rainy: boolean; playerPos: React.MutableRefObject<THREE.Vector3>; ground: string }) {
+function DayLight({ clock, rainy, playerPos, ground, shadows }: { clock: React.MutableRefObject<number>; rainy: boolean; playerPos: React.MutableRefObject<THREE.Vector3>; ground: string; shadows: boolean }) {
   const { scene, camera } = useThree();
   const dome = useRef<THREE.Group>(null);
   const stars = useRef<THREE.Points>(null);
@@ -571,7 +650,7 @@ function DayLight({ clock, rainy, playerPos, ground }: { clock: React.MutableRef
         </points>
       </group>
       <hemisphereLight ref={hemi} args={['#8fcfe8', ground, 0.8]} />
-      <directionalLight ref={sun} castShadow shadow-mapSize={[2048, 2048]} shadow-camera-left={-55} shadow-camera-right={55} shadow-camera-top={55} shadow-camera-bottom={-55} shadow-camera-far={300} shadow-bias={-0.0005} />
+      <directionalLight ref={sun} castShadow={shadows} shadow-mapSize={[2048, 2048]} shadow-camera-left={-55} shadow-camera-right={55} shadow-camera-top={55} shadow-camera-bottom={-55} shadow-camera-far={300} shadow-bias={-0.0005} />
       <directionalLight ref={moon} position={[-40, 60, -20]} intensity={0} color="#8ea6ff" />
     </>
   );

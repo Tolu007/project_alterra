@@ -23,6 +23,15 @@ export function install() {
       location.reload();
       return 'ok';
     },
+    /** Gives the player money, for trying out land, buildings and companies: __nh.cash(500_000_000). */
+    cash(amount = 100_000_000) {
+      const g = loadGame();
+      if (!g) return 'no saved game';
+      g.player.money += amount;
+      saveGame(g);
+      location.reload();
+      return 'ok';
+    },
     /** Puts the player in office for testing the budget session. */
     office(id: string) {
       const g = loadGame();

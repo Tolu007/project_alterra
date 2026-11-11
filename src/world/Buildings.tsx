@@ -164,7 +164,7 @@ export function Smoke({ x, y }: { x: number; y: number }) {
 }
 
 /** Standard walled building with roof, door, windows and an optional sign. */
-function Block({ w, h, d, wall, style, lit, sign, signBg, signFg, rusty, tank, doors = 1 }: { w: number; h: number; d: number; wall: string; style: SceneStyle; lit: boolean; sign?: string; signBg?: string; signFg?: string; rusty?: boolean; tank?: boolean; doors?: number }) {
+export function Block({ w, h, d, wall, style, lit, sign, signBg, signFg, rusty, tank, doors = 1 }: { w: number; h: number; d: number; wall: string; style: SceneStyle; lit: boolean; sign?: string; signBg?: string; signFg?: string; rusty?: boolean; tank?: boolean; doors?: number }) {
   const storeys = Math.max(1, Math.round(h / 3.2));
   return (
     <group>

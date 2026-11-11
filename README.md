@@ -223,6 +223,27 @@ where function storage is temporary.
 - **The phone** has the Travel app, bank alerts, your businesses' P&L, prices with charts,
   government, contacts, news and the map. While you travel, the route is drawn on the map.
 
+### Land, buildings and builders
+
+Every building in town can be dealt in. Tap any house, block of flats, row of shops, church, filling
+station or famous building (or an empty plot) and walk up to it: the menu gives its owner, what it is
+worth and the rent it brings in.
+
+- **Buy** it: the land and the building, plus agent and legal fees. Rent from everything you own is paid
+  every Sunday. On a plot you own, your own business pays no shop rent.
+- **Pull it down** to get a clear plot (not while tenants or a business are in it: banks, offices and
+  the like can be bought for their rent, but stay standing).
+- **Build** on a clear plot through a construction company: bungalow, lock-up shops, duplex, warehouse,
+  block of flats, plaza, hotel or office tower, as big as the plot allows. Prices differ a great deal.
+  The site is fenced with the contractor's board until the weeks are up.
+- **Choose your builder**: Julius Bamidele (dear and fast), Arewa Blocks & Builders (the going rate) or
+  Sharp-Sharp (cheap and slow).
+- **Buy the builder itself**: you then get its weekly profit, its margin on every job other players
+  give it, and your own buildings at cost.
+
+The market, motor park, government buildings, palaces, airports and your rented home are not for sale.
+In development, `__nh.cash(500_000_000)` in the browser console gives you money to try it all.
+
 ## How the world works
 
 - `src/engine/` is pure TypeScript with no React, seeded and deterministic. Each exported

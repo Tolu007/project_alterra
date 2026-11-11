@@ -2,6 +2,7 @@ import { BIZ, WAGES, bizType, type BizType, type BizTypeId } from '../data/busin
 import { tradeById, type Skill } from '../data/trades';
 import { LGAS, lgaById, stateById, type StateId, type TradeId } from '../data/world';
 import { clamp, localDemand, okadaBanned, services, startIncome, tradeIncome } from './economy';
+import { builtOn, deedOf, ownsPlot } from './property';
 import { hood } from './map';
 import { makePerson } from './people';
 import { humanOf, isHuman } from './seats';
@@ -39,7 +40,7 @@ export const needsFarmland = (type: BizTypeId) => type === 'farm' || type === 'r
 export const businessOn = (g: Game, lga: string, plot: number) => g.businesses.find((b) => b.lga === lga && b.plot === plot);
 
 /** Plots in an LGA nobody is using yet. */
-export const freeLots = (g: Game, lga: string) => hood(lga).lots.filter((id) => !businessOn(g, lga, id));
+export const freeLots = (g: Game, lga: string) => hood(lga).lots.filter((id) => !businessOn(g, lga, id) && !builtOn(g, lga, id));
 
 /** Why the player cannot open this business on this plot, or null. */
 export function openBlocked(g: Game, type: BizTypeId, lga: string, plot: number): string | null {
@@ -49,6 +50,9 @@ export function openBlocked(g: Game, type: BizTypeId, lga: string, plot: number)
   if (!isMobile(type)) {
     if (!p || !hood(lga).lots.includes(plot)) return 'This plot is not for lease.';
     if (businessOn(g, lga, plot)) return 'Somebody is already using this plot.';
+    if (builtOn(g, lga, plot)) return 'A building stands on this plot.';
+    const landlord = deedOf(g, lga, plot)?.owner ?? -1;
+    if (landlord >= 0 && landlord !== g.me) return 'The owner of this plot is not leasing it.';
     if (needsFarmland(type) !== (p.kind === 'farm')) return needsFarmland(type) ? 'Needs farmland on the edge of town.' : 'This is farmland. Build on a street plot.';
   }
   if (t.where && !t.where(l)) return `There is no room for a ${t.name.toLowerCase()} in ${l.nick}.`;
@@ -216,7 +220,8 @@ function fixedCosts(g: Game, b: Business): Pick<PnL, 'premises' | 'power' | 'upk
   // The worse the grid, the more diesel.
   const diesel = 1 + Math.max(0, 12 - pr.grid) / 12;
   return {
-    premises: (g.rent[b.lga] / 48) * RENT_BY_STAGE[stage],
+    // On your own land there is no landlord to pay.
+    premises: ownsPlot(g, b.lga, b.plot, b.owner) ? 0 : (g.rent[b.lga] / 48) * RENT_BY_STAGE[stage],
     power: POWER_BY_STAGE[stage] * (pr.energy / g.ref.energy[st]) * (1 + 2 * t.power) * diesel * (needsFarmland(b.type) ? 0.5 : 1),
     upkeep,
   };
